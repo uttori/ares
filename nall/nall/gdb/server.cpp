@@ -87,7 +87,8 @@ namespace nall::GDB {
     if(!hasActiveClient)return true;
 
     currentPC = pc;
-    bool needHalts = forceHalt || std::ranges::find(breakpoints, pc) != breakpoints.end();
+    bool needHalts = forceHalt || instructionBoundaryStopPending || std::ranges::find(breakpoints, pc) != breakpoints.end();
+    instructionBoundaryStopPending = false;
 
     if(needHalts) {
       forceHalt = true; // breakpoints may get deleted after a signal, but we have to stay stopped
@@ -116,6 +117,18 @@ namespace nall::GDB {
     return !watchpointRead.empty() || !watchpointWrite.empty();
   }
 
+  auto Server::reportInstruction(u64 pc) -> void {
+    if(!instructionTraceActive) return;
+    if(instructionTraceSize == instructionTraceCapacity) {
+      instructionTraceHead = (instructionTraceHead + 1) % instructionTraceCapacity;
+      instructionTraceSize--;
+      instructionTraceDroppedEvents++;
+    }
+    instructionTraceAddresses[(instructionTraceHead + instructionTraceSize) % instructionTraceCapacity] = pc;
+    instructionTraceSize++;
+    instructionTraceNextSequence++;
+  }
+
   /**
    * NOTE: please read the comment in the header server.hpp file before making any changes here!
    */
@@ -134,8 +147,14 @@ namespace nall::GDB {
       case '!': return "OK"; // informs us that "extended remote-debugging" is used
 
       case '?': // handshake: why did we halt?
-        haltProgram();
-        haltSignalSent = true;
+        if(hooks.instructionBoundaryStop) {
+          forceHalt = false;
+          haltSignalSent = false;
+          instructionBoundaryStopPending = true;
+        } else {
+          haltProgram();
+          haltSignalSent = true;
+        }
         return "T05"; // needs to be faked, otherwise the GDB-client hangs up and eats 100% CPU
 
       case 'c': // continue
@@ -247,8 +266,43 @@ namespace nall::GDB {
           ";QPassSignals+", // let the client ask us to swallow chosen signals
           NON_STOP_MODE ? ";QNonStop+" : "",
           "QStartNoAckMode+",
-          hooks.targetXML ? ";xmlRegisters+;qXfer:features:read+" : "" // (see: https://marc.info/?l=gdb&m=149901965961257&w=2)
+          hooks.targetXML ? ";xmlRegisters+;qXfer:features:read+" : "", // (see: https://marc.info/?l=gdb&m=149901965961257&w=2)
+          hooks.instructionBoundaryStop ? ";uttoriInstructionBoundaryStop+" : "",
+          hooks.namedMemoryRead ? ";uttoriNamedMemory+" : "",
+          hooks.instructionTrace ? ";uttoriInstructionTrace+" : ""
         };}
+
+        if(cmdName == "qUttoriMemoryRead") {
+          if(!hooks.namedMemoryRead || cmdParts.size() != 3) return "E00";
+          auto sepIdxMaybe = cmdParts[2].find(",");
+          if(!sepIdxMaybe) return "E00";
+          u32 sepIdx = sepIdxMaybe.get();
+          if(sepIdx == 0 || sepIdx + 1 >= cmdParts[2].size()) return "E00";
+          u64 address = cmdParts[2].slice(0, sepIdx).hex();
+          u64 count = cmdParts[2].slice(sepIdx + 1).hex();
+          if(count > MAX_PACKET_SIZE / 2) return "E00";
+          return hooks.namedMemoryRead(cmdParts[1], address, count);
+        }
+
+        if(cmdName == "qUttoriTraceRead") {
+          if(!hooks.instructionTrace || cmdParts.size() != 2) return "E00";
+          u64 requested = cmdParts[1].hex();
+          if(requested == 0 || requested > 240) return "E00";
+          u32 count = min<u64>(requested, instructionTraceSize);
+          u64 sequenceStart = instructionTraceNextSequence - instructionTraceSize;
+          string result{
+            instructionTraceActive ? "1:" : "0:",
+            hex(sequenceStart), ":",
+            hex(instructionTraceDroppedEvents), ":"
+          };
+          result.reserve(result.size() + count * 16);
+          for(u32 index : range(count)) {
+            result.append(hex(instructionTraceAddresses[(instructionTraceHead + index) % instructionTraceCapacity], 16, '0'));
+          }
+          instructionTraceHead = (instructionTraceHead + count) % instructionTraceCapacity;
+          instructionTraceSize -= count;
+          return result;
+        }
 
         // handshake-command, most return dummy values to convince gdb to connect
         if(cmdName == "qTStatus")return forceHalt ? "T1" : "";
@@ -278,7 +332,7 @@ namespace nall::GDB {
         if(cmdName == "qThreadExtraInfo,1")return ""; // ignoring this command fixes support for CLion (and VSCode?), otherwise gdb hangs
         if(cmdName == "qC")return {"QC1"};
         // there will also be a "qP0000001f0000000000000001" command depending on the IDE, this is ignored to prevent GDB from hanging up
-        break;
+      break;
 
       case 'Q':
         if(cmdName == "QPassSignals") { // e.g. "QPassSignals:0b;0e" (hex signal numbers); empty list = clear
@@ -289,6 +343,24 @@ namespace nall::GDB {
             }
           }
           return "OK";
+        }
+
+        if(cmdName == "QUttoriTrace") {
+          if(!hooks.instructionTrace || cmdParts.size() != 2) return "E00";
+          if(cmdParts[1] == "1") {
+            instructionTraceHead = 0;
+            instructionTraceSize = 0;
+            instructionTraceNextSequence = 1;
+            instructionTraceDroppedEvents = 0;
+            instructionTraceActive = true;
+            reportInstruction(currentPC);
+            return "OK";
+          }
+          if(cmdParts[1] == "0") {
+            instructionTraceActive = false;
+            return "OK";
+          }
+          return "E00";
         }
 
         if(cmdName == "QNonStop") { // 0=stop, 1=non-stop-mode (this allows for async GDB-communication)
@@ -542,6 +614,7 @@ namespace nall::GDB {
 
   auto Server::reset() -> void {
     hooks.read = nullptr;
+    hooks.namedMemoryRead = nullptr;
     hooks.write = nullptr;
     hooks.normalizeAddress = nullptr;
     hooks.regReadGeneral = nullptr;
@@ -550,6 +623,8 @@ namespace nall::GDB {
     hooks.regWrite = nullptr;
     hooks.emuCacheInvalidate = nullptr;
     hooks.targetXML = nullptr;
+    hooks.instructionBoundaryStop = false;
+    hooks.instructionTrace = false;
 
     resetClientData();
   }
@@ -572,6 +647,12 @@ namespace nall::GDB {
     haltSignalSent = false;
     forceHalt = false;
     singleStepActive = false;
+    instructionBoundaryStopPending = false;
+    instructionTraceHead = 0;
+    instructionTraceSize = 0;
+    instructionTraceNextSequence = 1;
+    instructionTraceDroppedEvents = 0;
+    instructionTraceActive = false;
     nonStopMode = false;
     noAckMode = false;
 

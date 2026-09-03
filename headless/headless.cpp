@@ -160,6 +160,9 @@ auto nall::main(Arguments arguments) -> void {
 
   ares::platform = &runtime;
   headless::configureCoreOptionsForMedium(runtime.medium, cli.launchSettings.coreOptions);
+  if(runtime.gdbEnabled) {
+    nall::GDB::server.reset();
+  }
   if(!headless::loadCoreForMedium(runtime.medium, runtime.root, runtime.profile)) {
     fprintf(stderr, "error: failed to load ares core profile: %s\n", runtime.profile.data());
     return;
@@ -171,8 +174,16 @@ auto nall::main(Arguments arguments) -> void {
 
   headless::connectDefaultPorts(runtime.root);
 
+  runtime.root->power();
+  if(runtime.stateSlot) {
+    if(!headless::loadState(runtime.root, runtime.gamePak->location, runtime.stateSlot, cli.launchSettings.savesPath)) {
+      fprintf(stderr, "warning: failed to load state from slot %u\n", runtime.stateSlot);
+    } else {
+      if(cli.verbosity >= 1) print("Loaded state from slot ", runtime.stateSlot, "\n");
+    }
+  }
+
   if(runtime.gdbEnabled) {
-    nall::GDB::server.reset();
     nall::GDB::server.open(runtime.gdbPort, runtime.gdbUseIPv4);
     nall::GDB::server.onClientConnectCallback = []() {
       fprintf(stderr, "GDB client connected\n");
@@ -180,7 +191,7 @@ auto nall::main(Arguments arguments) -> void {
 
     if(runtime.awaitGdbClient) {
       fprintf(stderr, "Waiting for GDB client on port %u...\n", runtime.gdbPort);
-      while(!runtime.shouldExit && !nall::GDB::server.hasClient()) {
+      while(!runtime.shouldExit && (!nall::GDB::server.hasClient() || (!nall::GDB::server.isHalted() && !nall::GDB::server.isInstructionBoundaryStopPending()))) {
         nall::GDB::server.updateLoop();
         usleep(20 * 1000);
       }
@@ -191,14 +202,6 @@ auto nall::main(Arguments arguments) -> void {
     freopen("/dev/null", "w", stderr);
   }
 
-  runtime.root->power();
-  if(runtime.stateSlot) {
-    if(!headless::loadState(runtime.root, runtime.gamePak->location, runtime.stateSlot, cli.launchSettings.savesPath)) {
-      fprintf(stderr, "warning: failed to load state from slot %u\n", runtime.stateSlot);
-    } else {
-      if(cli.verbosity >= 1) print("Loaded state from slot ", runtime.stateSlot, "\n");
-    }
-  }
   while(!runtime.shouldExit) {
     if(runtime.gdbEnabled && nall::GDB::server.isHalted()) {
       nall::GDB::server.updateLoop();

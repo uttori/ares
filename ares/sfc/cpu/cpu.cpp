@@ -1,4 +1,5 @@
 #include <sfc/sfc.hpp>
+#include <nall/gdb/server.hpp>
 
 namespace ares::SuperFamicom {
 
@@ -31,6 +32,10 @@ auto CPU::main() -> void {
   if(r.stp) return instructionStop();
 
   if(!status.interruptPending) {
+    nall::GDB::server.reportInstruction(r.pc.d);
+    while(!nall::GDB::server.reportPC(r.pc.d)) {
+      nall::GDB::server.updateLoop();
+    }
     debugger.instruction();
     return instruction();
   }

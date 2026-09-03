@@ -69,6 +69,7 @@ class Server : public nall::TCPText::Server {
     struct {
       // Memory
       std::function<string(u64 address, u32 byteCount)> read{};
+      std::function<string(const string& addressSpace, u64 address, u32 byteCount)> namedMemoryRead{};
       std::function<void(u64 address, std::vector<u8> value)> write{};
       std::function<u64(u64 address)> normalizeAddress{};
 
@@ -81,6 +82,8 @@ class Server : public nall::TCPText::Server {
       // Emulator
       std::function<void(u64 address)> emuCacheInvalidate{};
       std::function<string()> targetXML{};
+      bool instructionBoundaryStop{};
+      bool instructionTrace{};
 
 
     } hooks{};
@@ -92,11 +95,13 @@ class Server : public nall::TCPText::Server {
 
     // PC / Memory State Updates
     auto reportPC(u64 pc) -> bool;
+    auto reportInstruction(u64 pc) -> void;
     auto reportMemRead(u64 address, u32 size) -> void;
     auto reportMemWrite(u64 address, u32 size) -> void;
 
     // Breakpoints / Watchpoints
     auto isHalted() const { return forceHalt && haltSignalSent; }
+    auto isInstructionBoundaryStopPending() const { return instructionBoundaryStopPending; }
     auto hasBreakpoints() const { 
       return !breakpoints.empty() || singleStepActive || !watchpointRead.empty() || !watchpointWrite.empty();
     }
@@ -120,6 +125,15 @@ class Server : public nall::TCPText::Server {
     bool haltSignalSent{false}; // marks if a signal as been sent for new halts (force-halt and breakpoints)
     bool forceHalt{false}; // forces a halt despite no breakpoints being hit
     bool singleStepActive{false};
+    bool instructionBoundaryStopPending{false};
+
+    static constexpr u32 instructionTraceCapacity = 65536;
+    std::array<u64, instructionTraceCapacity> instructionTraceAddresses{};
+    u32 instructionTraceHead{0};
+    u32 instructionTraceSize{0};
+    u64 instructionTraceNextSequence{1};
+    u64 instructionTraceDroppedEvents{0};
+    bool instructionTraceActive{false};
 
     bool noAckMode{false}; // gets set if lldb prefers no acknowledgements
     bool nonStopMode{false}; // (NOTE: Not working for now), gets set if gdb wants to switch over to async-messaging
