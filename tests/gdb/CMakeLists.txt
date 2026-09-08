@@ -1,0 +1,23 @@
+if(NOT sfc IN_LIST ARES_CORES)
+  target_disable_subproject(gdb-tests "GDB register, storage, and lifecycle tests")
+  return()
+endif()
+
+set(gdb_targets gdb-registers)
+foreach(target IN LISTS gdb_targets)
+  add_executable(${target} ${target}.cpp)
+  target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/ares)
+  target_link_libraries(${target} PRIVATE ares::nall)
+  # Inspect protocol state only in the test translation unit. Keep assertions in release builds.
+  target_compile_options(${target} PRIVATE -fno-access-control -UNDEBUG)
+  set_target_properties(${target} PROPERTIES FOLDER tests PREFIX "")
+  set(CONSOLE TRUE)
+  ares_configure_executable(${target})
+  add_test(NAME ${target} COMMAND ${target})
+  set_tests_properties(${target} PROPERTIES TIMEOUT 10)
+  source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${target}.cpp)
+endforeach()
+
+add_custom_target(gdb-tests DEPENDS ${gdb_targets})
+target_sources(gdb-tests PRIVATE run-tests.sh README.md)
+target_enable_subproject(gdb-tests "GDB register, storage, and lifecycle tests")

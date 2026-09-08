@@ -161,7 +161,12 @@ namespace nall::GDB {
 
       case 'G': // set all general registers
         if(hooks.regWriteGeneral) {
-          hooks.regWriteGeneral(cmd.slice(1));
+          auto data = cmd.slice(1);
+          if(hooks.registersLittleEndian) {
+            if(!hooks.regReadGeneral || data.size() != hooks.regReadGeneral().size()) return "E00";
+            for(char c : data) if(!std::isxdigit(static_cast<unsigned char>(c))) return "E00";
+          }
+          hooks.regWriteGeneral(data);
           return "OK";
         }
       break;
@@ -231,8 +236,23 @@ namespace nall::GDB {
           auto sepIdxMaybe = cmdName.find("=");
           u32 sepIdx = sepIdxMaybe ? sepIdxMaybe.get() : 1;
           
-          u32 regIdx = static_cast<u32>(cmdName.slice(1, sepIdx-1).hex());
-          u64 regValue = cmdName.slice(sepIdx+1).hex();
+          auto index = cmdName.slice(1, sepIdx-1);
+          if(hooks.registersLittleEndian) {
+            if(!sepIdxMaybe || !index || index.size() > 8) return "E00";
+            for(char c : index) if(!std::isxdigit(static_cast<unsigned char>(c))) return "E00";
+          }
+          u32 regIdx = static_cast<u32>(index.hex());
+          auto data = cmdName.slice(sepIdx+1);
+          u64 regValue = data.hex();
+          if(hooks.registersLittleEndian) {
+            if(!sepIdxMaybe || !hooks.regRead || data.size() == 0 || data.size() > 16
+            || data.size() % 2 || data.size() != hooks.regRead(regIdx).size()) return "E00";
+            for(char c : data) if(!std::isxdigit(static_cast<unsigned char>(c))) return "E00";
+            regValue = 0;
+            for(u32 byte : range(data.size() / 2)) {
+              regValue |= data.slice(byte * 2, 2).hex() << (byte * 8);
+            }
+          }
 
           return hooks.regWrite(regIdx, regValue) ? "OK" : "E00";
         }
@@ -267,7 +287,20 @@ namespace nall::GDB {
           if(cmdParts[1] == "features" && cmdParts[2] == "read") {
             // informs the client about arch/registers (https://sourceware.org/gdb/onlinedocs/gdb/Target-Description-Format.html#Target-Description-Format)
             if(cmdParts[3] == "target.xml") {
-              return hooks.targetXML ? string{"l", hooks.targetXML()} : string{""};
+              if(!hooks.targetXML) return "";
+              auto bounds = nall::split(cmdParts[4], ",");
+              if(bounds.size() != 2) return "E00";
+              for(auto& bound : bounds) {
+                if(!bound || bound.size() > 16) return "E00";
+                for(char c : bound) if(!std::isxdigit(static_cast<unsigned char>(c))) return "E00";
+              }
+              auto offset = bounds[0].hex();
+              auto length = bounds[1].hex();
+              if(!length) return "E00";
+              auto xml = hooks.targetXML();
+              if(offset >= xml.size()) return "l";
+              length = min<u64>(length, min<u64>(xml.size() - offset, MAX_PACKET_SIZE - 1));
+              return {offset + length < xml.size() ? "m" : "l", xml.slice(offset, length)};
             }
           }
         }
@@ -544,6 +577,7 @@ namespace nall::GDB {
     hooks.read = nullptr;
     hooks.write = nullptr;
     hooks.normalizeAddress = nullptr;
+    hooks.registersLittleEndian = false;
     hooks.regReadGeneral = nullptr;
     hooks.regWriteGeneral = nullptr;
     hooks.regRead = nullptr;

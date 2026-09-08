@@ -73,6 +73,7 @@ class Server : public nall::TCPText::Server {
       std::function<u64(u64 address)> normalizeAddress{};
 
       // Registers
+      bool registersLittleEndian = false;
       std::function<string()> regReadGeneral{};
       std::function<void(const string &regData)> regWriteGeneral{};
       std::function<string(u32 regIdx)> regRead{};
