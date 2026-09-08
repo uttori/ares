@@ -17,6 +17,10 @@ paths, platform libraries, and the core profile come from the normal ares build.
 
 - `gdb-registers` checks 65816 register layout and normalization with actual
   WDC65816 register types and a register-only CPU fixture.
+- `gdb-memory-packets` rejects malformed, overflowing, and oversized RSP memory
+  requests before invoking storage.
+- `gdb-storage` links the real SFC core and checks WRAM aliases, device-handler
+  exclusion, cartridge RAM offsets, remap/unmap, and physical storage bounds.
 
 Only the test translation units use `-fno-access-control` to inspect protocol
 state; assertions remain enabled in release builds with `-UNDEBUG`. The ares
