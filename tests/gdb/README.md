@@ -21,6 +21,8 @@ paths, platform libraries, and the core profile come from the normal ares build.
   requests before invoking storage.
 - `gdb-storage` links the real SFC core and checks WRAM aliases, device-handler
   exclusion, cartridge RAM offsets, remap/unmap, and physical storage bounds.
+- `gdb-boundaries` checks deferred stop/reset responses, stepping off breakpoints,
+  quiescent stops, disconnect/reconnect, and legacy-core behavior.
 
 Only the test translation units use `-fno-access-control` to inspect protocol
 state; assertions remain enabled in release builds with `-UNDEBUG`. The ares
@@ -29,3 +31,9 @@ Linux/Windows execution remains before runtime promotion.
 
 The register contract targets 65816-aware RSP clients. Stock GDB has no 65816
 architecture backend, and XML alone does not add one.
+
+The core reports instruction boundaries and idle boundaries within WAI/STP.
+Idle boundaries permit control without firing an execution breakpoint at the
+following PC. `monitor reset`/`reset halt` complete at the reset-vector boundary;
+`monitor reset run` preserves breakpoints and resumes subject to desktop pause.
+An RSP control loop must continue entering the core while a stop is pending.

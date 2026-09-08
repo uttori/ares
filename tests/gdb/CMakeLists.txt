@@ -3,7 +3,7 @@ if(NOT sfc IN_LIST ARES_CORES)
   return()
 endif()
 
-set(gdb_targets gdb-registers gdb-memory-packets gdb-storage)
+set(gdb_targets gdb-registers gdb-memory-packets gdb-storage gdb-boundaries)
 foreach(target IN LISTS gdb_targets)
   add_executable(${target} ${target}.cpp)
   target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/ares)

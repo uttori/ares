@@ -1,4 +1,5 @@
 #include <sfc/sfc.hpp>
+#include <nall/gdb/server.hpp>
 
 namespace ares::SuperFamicom {
 
@@ -31,6 +32,8 @@ auto CPU::main() -> void {
   if(r.stp) return instructionStop();
 
   if(!status.interruptPending) {
+    // Yield to the desktop worker while halted so its UI/quit guard remains live.
+    while(!nall::GDB::server.reportPC(r.pc.d)) scheduler.exit(Event::Step);
     debugger.instruction();
     return instruction();
   }

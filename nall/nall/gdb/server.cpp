@@ -83,18 +83,26 @@ namespace nall::GDB {
     }
   }
 
-  auto Server::reportPC(u64 pc) -> bool {
+  auto Server::reportPC(u64 pc, bool instruction) -> bool {
     if(!hasActiveClient)return true;
 
+    bool skipBreakpoint = skipBreakpointOnce && currentPC == pc;
     currentPC = pc;
-    bool needHalts = forceHalt || std::ranges::find(breakpoints, pc) != breakpoints.end();
+    bool needHalts = forceHalt || (instruction && !skipBreakpoint && std::ranges::find(breakpoints, pc) != breakpoints.end());
+    skipBreakpointOnce = false;
+    stoppedAtInstructionBoundary = hooks.instructionBoundaryStop && needHalts;
 
     if(needHalts) {
       forceHalt = true; // breakpoints may get deleted after a signal, but we have to stay stopped
 
       if(!haltSignalSent) {
         haltSignalSent = true;
-        sendSignal(Signal::TRAP);
+        if(pendingResetReply) {
+          pendingResetReply = false;
+          sendPayload("OK");
+        } else {
+          sendSignal(Signal::TRAP);
+        }
       }
     }
 
@@ -129,11 +137,20 @@ namespace nall::GDB {
       printf("GDB <: %s\n", cmdBuffer.data());
     }
 
+    if(hooks.instructionBoundaryStop && isStopPending()
+    && (cmdPrefix == 'g' || cmdPrefix == 'G' || cmdPrefix == 'p' || cmdPrefix == 'P'
+    || cmdPrefix == 'm' || cmdPrefix == 'M')) return "E00";
+
     switch(cmdPrefix)
     {
       case '!': return "OK"; // informs us that "extended remote-debugging" is used
 
       case '?': // handshake: why did we halt?
+        if(hooks.instructionBoundaryStop && !stoppedAtInstructionBoundary) {
+          haltProgram();
+          shouldReply = false; // reportPC replies only after the core reaches a safe stop
+          return "";
+        }
         haltProgram();
         haltSignalSent = true;
         return "T05"; // needs to be faked, otherwise the GDB-client hangs up and eats 100% CPU
@@ -265,6 +282,30 @@ namespace nall::GDB {
       break;
 
       case 'q':
+        if(cmdName.beginsWith("qRcmd,")) {
+          if(!hooks.emuReset) return "";
+          auto encoded = cmdName.slice(6);
+          if(!encoded || encoded.size() % 2 || encoded.size() > 256) return "E00";
+          for(char c : encoded) if(!std::isxdigit(static_cast<unsigned char>(c))) return "E00";
+          string monitor;
+          for(u32 byte : range(encoded.size() / 2)) monitor.append(char(encoded.slice(byte * 2, 2).hex()));
+          bool run = monitor == "reset run";
+          if(!run && monitor != "reset" && monitor != "reset halt") return "E00";
+          if(!hooks.instructionBoundaryStop || pendingResetReply) return "E00";
+          singleStepActive = false;
+          stoppedAtInstructionBoundary = false;
+          skipBreakpointOnce = false;
+          pcOverride.reset();
+          hooks.emuReset(); // called by the frontend, outside the emulated CPU stack
+          if(run) {
+            resumeProgram();
+            return "OK";
+          }
+          haltProgram();
+          pendingResetReply = true;
+          shouldReply = false; // complete monitor reset halt at the reset-vector boundary
+          return "";
+        }
         // This tells the client what we can and can't do
         if(cmdName == "qSupported"){ return {
           "PacketSize=", hex(MAX_PACKET_SIZE),
@@ -559,6 +600,8 @@ namespace nall::GDB {
   }
 
   auto Server::resumeProgram() -> void {
+    skipBreakpointOnce = hooks.instructionBoundaryStop && stoppedAtInstructionBoundary;
+    stoppedAtInstructionBoundary = false;
     pcOverride.reset();
     forceHalt = false;
     haltSignalSent = false;
@@ -566,10 +609,9 @@ namespace nall::GDB {
 
   auto Server::onConnect() -> void {
     printf("GDB client connected\n");
-    if (onClientConnectCallback)
-      onClientConnectCallback();
     resetClientData();
     hasActiveClient = true;
+    if(onClientConnectCallback) onClientConnectCallback();
   }
 
   auto Server::onDisconnect() -> void {
@@ -588,6 +630,8 @@ namespace nall::GDB {
     hooks.regWriteGeneral = nullptr;
     hooks.regRead = nullptr;
     hooks.regWrite = nullptr;
+    hooks.instructionBoundaryStop = false;
+    hooks.emuReset = nullptr;
     hooks.emuCacheInvalidate = nullptr;
     hooks.targetXML = nullptr;
 
@@ -612,6 +656,9 @@ namespace nall::GDB {
     haltSignalSent = false;
     forceHalt = false;
     singleStepActive = false;
+    stoppedAtInstructionBoundary = false;
+    skipBreakpointOnce = false;
+    pendingResetReply = false;
     nonStopMode = false;
     noAckMode = false;
 
