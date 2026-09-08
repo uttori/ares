@@ -66,8 +66,12 @@ auto CPU::map() -> void {
 
   reader = std::bind_front(&CPU::readRAM, this);
   writer = std::bind_front(&CPU::writeRAM, this);
-  bus.map(reader, writer, "00-3f,80-bf:0000-1fff", 0x2000);
-  bus.map(reader, writer, "7e-7f:0000-ffff", 0x20000);
+  auto peek = [this](n24 address) -> maybe<n8> {
+    if(address >= 128_KiB) return {};
+    return wram[address];
+  };
+  bus.map(reader, writer, "00-3f,80-bf:0000-1fff", 0x2000, 0, 0, peek);
+  bus.map(reader, writer, "7e-7f:0000-ffff", 0x20000, 0, 0, peek);
 
   reader = std::bind_front(&CPU::readAPU, this);
   writer = std::bind_front(&CPU::writeAPU, this);

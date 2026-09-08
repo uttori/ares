@@ -189,11 +189,17 @@ namespace nall::GDB {
             return "";
           }
 
-          auto sepIdxMaybe = cmdName.find(",");
-          u32 sepIdx = sepIdxMaybe ? sepIdxMaybe.get() : 1;
-
-          u64 address = cmdName.slice(1, sepIdx-1).hex();
-          u64 count = cmdName.slice(sepIdx+1, cmdName.size()-sepIdx).hex();
+          // Reject invalid or overflowing input before integer conversion can alias it.
+          auto arguments = cmdName.slice(1);
+          auto fields = nall::split(arguments, ",");
+          if(cmdParts.size() != 1 || fields.size() != 2) return "E00";
+          for(auto& field : fields) {
+            if(!field || field.size() > 16) return "E00";
+            for(char c : field) if(!std::isxdigit(static_cast<unsigned char>(c))) return "E00";
+          }
+          u64 address = fields[0].hex();
+          u64 count = fields[1].hex();
+          if(count > MAX_PACKET_SIZE / 2) return "E00";
           return hooks.read(address, count);
         }
       break;
