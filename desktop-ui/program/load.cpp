@@ -123,12 +123,13 @@ auto Program::load(string location) -> bool {
     tapeViewer.reload();
   }
   state = {};  //reset hotkey state slot to 1
+  awaitGdbHandshake = settings.developer.debugServerEnabled && settings.boot.awaitGDBClient;
   if(settings.boot.debugger) {
     pause(true);
     if(toolsWindowConstructed) toolsWindow.show("Tracer");
     presentation.setFocused();
-  } else if (settings.boot.awaitGDBClient) {
-    pause(true);
+  } else if(awaitGdbHandshake) {
+    pause(false); // the handshake gate is separate from a user's pause
   } else {
     pause(false);
   }
@@ -137,10 +138,8 @@ auto Program::load(string location) -> bool {
 
   if(settings.developer.debugServerEnabled) {
     nall::GDB::server.open(settings.developer.debugServerPort, settings.developer.debugServerUseIPv4);
-    nall::GDB::server.onClientConnectCallback = []() {
-      if (settings.boot.awaitGDBClient)
-        program.pause(false);
-    };
+    // A TCP connection alone must not release the first instruction.
+    nall::GDB::server.onClientConnectCallback = {};
   }
 
   //update recent games list
@@ -168,6 +167,7 @@ auto Program::unload() -> void {
   Program::Guard guard;
   if(!emulator) return;
 
+  awaitGdbHandshake = false;
   nall::GDB::server.close();
   nall::GDB::server.reset();
 

@@ -21,6 +21,8 @@ auto normalizeGdbRegisters() -> void {
 
 auto installGdbHooks() -> void {
   using nall::GDB::server;
+  server.hooks.instructionBoundaryStop = true;
+  server.hooks.emuReset = [] { system.power(true); };
   server.hooks.registersLittleEndian = true;
   server.hooks.targetXML = []() -> string {
     return "<target version=\"1.0\">"
