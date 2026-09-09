@@ -36,6 +36,9 @@ auto CPU::main() -> void {
       // Preserve the instruction boundary, but let the frontend service its
       // UI/quit/settings guard while stopped. It owns the RSP polling loop.
       scheduler.exit(Event::Step);
+      // Save/load enters here to create a synchronized undo snapshot. Stay at
+      // the stopped instruction instead of blocking until the client times out.
+      scheduler.synchronize();
     }
     auto& trace = nall::GDB::server;
     if(trace.detailedTraceActive()) {
