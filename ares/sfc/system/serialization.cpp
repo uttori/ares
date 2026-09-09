@@ -38,6 +38,10 @@ auto System::unserialize(serializer& s) -> bool {
 
   if(synchronize) power(/* reset = */ false);
   serialize(s, synchronize);
+  if(synchronize && nall::GDB::server.isHalted()) {
+    // Refresh the acknowledged stop without disconnecting or resuming it.
+    nall::GDB::server.reportPC(cpu.r.pc.d);
+  }
   return true;
 }
 

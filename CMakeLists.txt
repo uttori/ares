@@ -46,6 +46,7 @@ option(ARES_BUILD_OPTIONAL_TARGETS "Include supplemental tools and tests" OFF)
 
 if(ARES_BUILD_OPTIONAL_TARGETS)
   enable_testing()
+  add_subdirectory(tests/gdb-states)
   add_subdirectory(tests/arm7tdmi)
   add_subdirectory(tests/armv6m)
   add_subdirectory(tests/i8080)
