@@ -1,6 +1,8 @@
 #include <nall/nall.hpp>
 #include <nall/main.hpp>
 #include <nall/gdb/server.cpp>
+// nall defines NDEBUG from BUILD_RELEASE even when the compiler uses -UNDEBUG.
+#undef NDEBUG
 #include <cassert>
 #include <iostream>
 using namespace nall;

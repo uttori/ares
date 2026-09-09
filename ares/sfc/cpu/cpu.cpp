@@ -33,7 +33,12 @@ auto CPU::main() -> void {
 
   if(!status.interruptPending) {
     // Yield to the desktop worker while halted so its UI/quit guard remains live.
-    while(!nall::GDB::server.reportPC(r.pc.d)) scheduler.exit(Event::Step);
+    while(!nall::GDB::server.reportPC(r.pc.d)) {
+      scheduler.exit(Event::Step);
+      // A save (including the undo snapshot before loading) may resume us here.
+      // This instruction boundary is safe to serialize without advancing the CPU.
+      scheduler.synchronize();
+    }
     debugger.instruction();
     return instruction();
   }

@@ -23,9 +23,18 @@ paths, platform libraries, and the core profile come from the normal ares build.
   exclusion, cartridge RAM offsets, remap/unmap, and physical storage bounds.
 - `gdb-boundaries` checks deferred stop/reset responses, stepping off breakpoints,
   quiescent stops, disconnect/reconnect, and legacy-core behavior.
+- `gdb-states` links the real SFC core and exercises synchronized save, the undo
+  snapshot taken before loading, load, undo load, and stepping from a restored
+  breakpoint. Instruction, WAI, and STP stops run with both PPU implementations.
+  Save/load callbacks run on a separate thread while the emulation thread is
+  idle, matching the desktop's guarded handoff. CPU clocks and registers must
+  remain unchanged during each snapshot, and no duplicate stop packet is sent.
+  A bounded scheduler-event guard makes the original hang fail immediately;
+  CTest also imposes a ten-second timeout.
 
 Only the test translation units use `-fno-access-control` to inspect protocol
-state; assertions remain enabled in release builds with `-UNDEBUG`. The ares
+state. Each test undefines `NDEBUG` after including nall and before `<cassert>`:
+nall's build-mode header otherwise redefines it despite `-UNDEBUG`. The ares
 Clang/GCC toolchains are supported. This preparation was run on macOS arm64;
 Linux/Windows execution remains before runtime promotion.
 
