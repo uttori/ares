@@ -121,6 +121,7 @@ auto Program::load(string location) -> bool {
     tapeViewer.reload();
   }
   state = {};  //reset hotkey state slot to 1
+  awaitGdbHandshake = settings.developer.debugServerEnabled && settings.boot.awaitGDBClient;
   if(settings.boot.debugger) {
     pause(true);
     if(toolsWindowConstructed) toolsWindow.show("Tracer");
@@ -135,10 +136,9 @@ auto Program::load(string location) -> bool {
 
   if(settings.developer.debugServerEnabled) {
     nall::GDB::server.open(settings.developer.debugServerPort, settings.developer.debugServerUseIPv4);
-    nall::GDB::server.onClientConnectCallback = []() {
-      if (settings.boot.awaitGDBClient)
-        program.pause(false);
-    };
+    // A socket alone is not a debugger entry stop. The worker waits for the
+    // RSP stop handshake before allowing the first CPU instruction boundary.
+    nall::GDB::server.onClientConnectCallback = {};
   }
 
   //update recent games list

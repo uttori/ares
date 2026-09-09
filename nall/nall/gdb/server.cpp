@@ -129,6 +129,40 @@ namespace nall::GDB {
     instructionTraceNextSequence++;
   }
 
+  auto Server::beginInstructionTrace(u64 pc, const std::array<u16, 10>& state) -> void {
+    if(!detailedTraceActive()) return;
+    pendingTrace = {};
+    pendingTrace.pc = pc;
+    pendingTrace.state = state;
+    pendingTraceActive = true;
+  }
+
+  auto Server::traceMemory(u64 address, u8 value, u8 access, u8 actor, u8 channel) -> void {
+    if(!pendingTraceActive) {
+      if(detailedTraceActive()) unattributedTraceMemory++;
+      return;
+    }
+    if(pendingTrace.memoryCount == pendingTrace.memory.size()) { pendingTrace.dropped++; return; }
+    pendingTrace.memory[pendingTrace.memoryCount++] = {address, value, access, actor, channel};
+  }
+
+  auto Server::traceFetch(u64 address, u8 value) -> void {
+    if(!pendingTraceActive) return;
+    if(pendingTrace.byteCount < pendingTrace.bytes.size()) pendingTrace.bytes[pendingTrace.byteCount++] = value;
+    if(pendingTrace.memoryCount) {
+      auto& last = pendingTrace.memory[pendingTrace.memoryCount - 1];
+      if(last.actor == 0 && last.address == address) last.access = 2;
+    }
+  }
+
+  auto Server::endInstructionTrace() -> void {
+    if(!pendingTraceActive) return;
+    pendingTraceActive = false;
+    if(!instructionTraceActive) return;
+    reportInstruction(pendingTrace.pc);
+    instructionTraceDetails[(instructionTraceHead + instructionTraceSize - 1) % instructionTraceCapacity] = pendingTrace;
+  }
+
   /**
    * NOTE: please read the comment in the header server.hpp file before making any changes here!
    */
@@ -269,7 +303,8 @@ namespace nall::GDB {
           hooks.targetXML ? ";xmlRegisters+;qXfer:features:read+" : "", // (see: https://marc.info/?l=gdb&m=149901965961257&w=2)
           hooks.instructionBoundaryStop ? ";uttoriInstructionBoundaryStop+" : "",
           hooks.namedMemoryRead ? ";uttoriNamedMemory+" : "",
-          hooks.instructionTrace ? ";uttoriInstructionTrace+" : ""
+          hooks.instructionTrace ? ";uttoriInstructionTrace+" : "",
+          hooks.instructionTraceDetails ? ";uttoriInstructionDetails+;uttoriSramMemory+;uttoriAramMemory+" : ""
         };}
 
         if(cmdName == "qUttoriMemoryRead") {
@@ -284,7 +319,9 @@ namespace nall::GDB {
           return hooks.namedMemoryRead(cmdParts[1], address, count);
         }
 
-        if(cmdName == "qUttoriTraceRead") {
+        if(cmdName == "qUttoriTraceRead" || cmdName == "qUttoriTraceDetailRead") {
+          bool detailed = cmdName == "qUttoriTraceDetailRead";
+          if(detailed != instructionTraceFull) return "E00";
           if(!hooks.instructionTrace || cmdParts.size() != 2) return "E00";
           u64 requested = cmdParts[1].hex();
           if(requested == 0 || requested > 240) return "E00";
@@ -296,11 +333,31 @@ namespace nall::GDB {
             hex(instructionTraceDroppedEvents), ":"
           };
           result.reserve(result.size() + count * 16);
+          if(detailed) result.append(hex(unattributedTraceMemory), ":");
+          u32 delivered = 0;
           for(u32 index : range(count)) {
-            result.append(hex(instructionTraceAddresses[(instructionTraceHead + index) % instructionTraceCapacity], 16, '0'));
+            string row;
+            auto slot = (instructionTraceHead + index) % instructionTraceCapacity;
+            row.append(hex(instructionTraceAddresses[slot], 16, '0'));
+            if(detailed) {
+              const auto& detail = instructionTraceDetails[slot];
+              row.append(",");
+              for(auto value : detail.state) row.append(hex(value, 4, '0'));
+              row.append(",");
+              for(u32 byte : range(detail.byteCount)) row.append(hex(detail.bytes[byte], 2, '0'));
+              row.append(",", hex(detail.dropped), ",");
+              for(u32 access : range(detail.memoryCount)) {
+                const auto& memory = detail.memory[access];
+                row.append(hex(memory.address, 16, '0'), hex(memory.value, 2, '0'), hex(memory.access, 1, '0'), hex(memory.actor, 1, '0'), hex(memory.channel, 1, '0'));
+              }
+              row.append(";");
+            }
+            if(result.size() + row.size() > MAX_PACKET_SIZE) break;
+            result.append(row);
+            delivered++;
           }
-          instructionTraceHead = (instructionTraceHead + count) % instructionTraceCapacity;
-          instructionTraceSize -= count;
+          instructionTraceHead = (instructionTraceHead + delivered) % instructionTraceCapacity;
+          instructionTraceSize -= delivered;
           return result;
         }
 
@@ -347,17 +404,23 @@ namespace nall::GDB {
 
         if(cmdName == "QUttoriTrace") {
           if(!hooks.instructionTrace || cmdParts.size() != 2) return "E00";
-          if(cmdParts[1] == "1") {
+          if(cmdParts[1] == "1" || cmdParts[1] == "2") {
+            if(cmdParts[1] == "2" && !hooks.instructionTraceDetails) return "E00";
+            instructionTraceFull = cmdParts[1] == "2";
+            pendingTraceActive = false;
+            if(instructionTraceFull) instructionTraceDetails.resize(instructionTraceCapacity);
             instructionTraceHead = 0;
             instructionTraceSize = 0;
             instructionTraceNextSequence = 1;
             instructionTraceDroppedEvents = 0;
+            unattributedTraceMemory = 0;
             instructionTraceActive = true;
-            reportInstruction(currentPC);
             return "OK";
           }
           if(cmdParts[1] == "0") {
+            if(pendingTraceActive) unattributedTraceMemory += pendingTrace.memoryCount + pendingTrace.dropped;
             instructionTraceActive = false;
+            pendingTraceActive = false;
             return "OK";
           }
           return "E00";
@@ -552,7 +615,7 @@ namespace nall::GDB {
         if(wasHalted && !isHalted())return;
 
         if(messageCount > 0 && maxLoopResets > 0) {
-          i = loopCount; // reset loop here to keep a fast chain of messages going (reduces latency)
+          i = 0; // reset loop here to keep a fast chain of messages going (reduces latency)
           --maxLoopResets;
         }
       }
@@ -653,6 +716,8 @@ namespace nall::GDB {
     instructionTraceNextSequence = 1;
     instructionTraceDroppedEvents = 0;
     instructionTraceActive = false;
+    instructionTraceFull = false;
+    pendingTraceActive = false;
     nonStopMode = false;
     noAckMode = false;
 

@@ -11,6 +11,7 @@ struct WDC65816 {
   virtual auto idleBranch() -> void {}
   virtual auto idleJump() -> void {}
   virtual auto read(n24 address) -> n8 = 0;
+  virtual auto instructionFetch(n24 address, n8 value) -> void {}
   virtual auto write(n24 address, n8 data) -> void = 0;
   virtual auto lastCycle() -> void = 0;
   virtual auto interruptPending() const -> bool = 0;

@@ -15,6 +15,7 @@ auto CPU::read(n24 address) -> n8 {
   aluEdge();
   //$00-3f,80-bf:4000-43ff reads are internal to CPU, and do not update the MDR
   if((address & 0x40fc00) != 0x4000) r.mdr = data;
+  nall::GDB::server.traceMemory(address, data, 0);
   return data;
 }
 
@@ -25,6 +26,7 @@ auto CPU::write(n24 address, n8 data) -> void {
   r.mar = address;
   step(status.clockCount);
   bus.write(address, r.mdr = data);
+  nall::GDB::server.traceMemory(address, data, 1);
 }
 
 alwaysinline auto CPU::wait(n24 address) const -> u32 {
@@ -43,4 +45,8 @@ alwaysinline auto CPU::wait(n24 address) const -> u32 {
 
 auto CPU::readDisassembler(n24 address) -> n8 {
   return bus.read(address, r.mdr);
+}
+
+auto CPU::instructionFetch(n24 address, n8 value) -> void {
+  nall::GDB::server.traceFetch(address, value);
 }
