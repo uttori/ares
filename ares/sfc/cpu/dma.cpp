@@ -64,6 +64,7 @@ inline auto CPU::Channel::readA(n24 address) -> n8 {
   step(4);
   cpu.r.mdr = validA(address) ? bus.read(address, cpu.r.mdr) : (n8)0x00;
   step(4);
+  if(validA(address)) nall::GDB::server.traceMemory(address, cpu.r.mdr, 0, dmaEnable ? 1 : 2, id);
   return cpu.r.mdr;
 }
 
@@ -71,15 +72,16 @@ inline auto CPU::Channel::readB(n8 address, bool valid) -> n8 {
   step(4);
   cpu.r.mdr = valid ? bus.read(0x2100 | address, cpu.r.mdr) : (n8)0x00;
   step(4);
+  if(valid) nall::GDB::server.traceMemory(0x2100 | address, cpu.r.mdr, 0, dmaEnable ? 1 : 2, id);
   return cpu.r.mdr;
 }
 
 inline auto CPU::Channel::writeA(n24 address, n8 data) -> void {
-  if(validA(address)) bus.write(address, data);
+  if(validA(address)) { bus.write(address, data); nall::GDB::server.traceMemory(address, data, 1, dmaEnable ? 1 : 2, id); }
 }
 
 inline auto CPU::Channel::writeB(n8 address, n8 data, bool valid) -> void {
-  if(valid) bus.write(0x2100 | address, data);
+  if(valid) { bus.write(0x2100 | address, data); nall::GDB::server.traceMemory(0x2100 | address, data, 1, dmaEnable ? 1 : 2, id); }
 }
 
 inline auto CPU::Channel::transfer(n24 addressA, n2 index) -> void {

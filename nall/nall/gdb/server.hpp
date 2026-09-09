@@ -84,6 +84,7 @@ class Server : public nall::TCPText::Server {
       std::function<string()> targetXML{};
       bool instructionBoundaryStop{};
       bool instructionTrace{};
+      bool instructionTraceDetails{};
 
 
     } hooks{};
@@ -96,6 +97,12 @@ class Server : public nall::TCPText::Server {
     // PC / Memory State Updates
     auto reportPC(u64 pc) -> bool;
     auto reportInstruction(u64 pc) -> void;
+    auto beginInstructionTrace(u64 pc, const std::array<u16, 10>& state) -> void;
+    auto traceFetch(u64 address, u8 value) -> void;
+    auto traceMemory(u64 address, u8 value, u8 access, u8 actor = 0, u8 channel = 15) -> void;
+    auto endInstructionTrace() -> void;
+    auto detailedTraceActive() const -> bool { return instructionTraceActive && instructionTraceFull; }
+
     auto reportMemRead(u64 address, u32 size) -> void;
     auto reportMemWrite(u64 address, u32 size) -> void;
 
@@ -134,6 +141,18 @@ class Server : public nall::TCPText::Server {
     u64 instructionTraceNextSequence{1};
     u64 instructionTraceDroppedEvents{0};
     bool instructionTraceActive{false};
+    struct TraceMemory { u64 address{}; u8 value{}, access{}, actor{}, channel{}; };
+    struct TraceDetail {
+      std::array<u16, 10> state{};
+      std::array<u8, 4> bytes{};
+      std::array<TraceMemory, 32> memory{};
+      u64 pc{}, dropped{};
+      u8 byteCount{}, memoryCount{};
+    };
+    std::vector<TraceDetail> instructionTraceDetails;
+    TraceDetail pendingTrace{};
+    bool instructionTraceFull{false}, pendingTraceActive{false};
+    u64 unattributedTraceMemory{0};
 
     bool noAckMode{false}; // gets set if lldb prefers no acknowledgements
     bool nonStopMode{false}; // (NOTE: Not working for now), gets set if gdb wants to switch over to async-messaging

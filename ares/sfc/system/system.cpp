@@ -44,6 +44,7 @@ auto installGdbHooks() -> void {
 
   server.hooks.instructionBoundaryStop = true;
   server.hooks.instructionTrace = true;
+  server.hooks.instructionTraceDetails = true;
 
   server.hooks.targetXML = []() -> string {
     return "<target version=\"1.0\">"
@@ -83,6 +84,8 @@ auto installGdbHooks() -> void {
     u64 memorySize = 0;
     if(addressSpace == "snes.wram") memorySize = 128_KiB;
     else if(addressSpace == "snes.cartridge-rom") memorySize = cartridge.rom.size();
+    else if(addressSpace == "snes.sram") memorySize = cartridge.ram.size();
+    else if(addressSpace == "snes.spc700.aram") memorySize = 64_KiB;
     else return "E00";
 
     if(address >= memorySize) return {};
@@ -92,6 +95,8 @@ auto installGdbHooks() -> void {
     for(u32 byte : range(readable)) {
       n8 value = addressSpace == "snes.wram"
         ? cpu.wram[address + byte]
+        : addressSpace == "snes.sram" ? cartridge.ram.read(address + byte)
+        : addressSpace == "snes.spc700.aram" ? dsp.apuram[address + byte]
         : cartridge.rom.read(address + byte);
       result.append(hex(value, 2, '0'));
     }

@@ -77,6 +77,17 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
       continue;
     }
 
+    if(awaitGdbHandshake) {
+      nall::GDB::server.updateLoop();
+      if(nall::GDB::server.hasClient() && (nall::GDB::server.isHalted() || nall::GDB::server.isInstructionBoundaryStopPending())) {
+        awaitGdbHandshake = false;
+        pause(false);
+      } else {
+        usleep(20 * 1000);
+        continue;
+      }
+    }
+
     if(emulator && nall::GDB::server.isHalted()) {
       ruby::audio.clear();
       nall::GDB::server.updateLoop(); // sleeps internally

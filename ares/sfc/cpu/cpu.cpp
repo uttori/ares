@@ -32,10 +32,20 @@ auto CPU::main() -> void {
   if(r.stp) return instructionStop();
 
   if(!status.interruptPending) {
-    nall::GDB::server.reportInstruction(r.pc.d);
     while(!nall::GDB::server.reportPC(r.pc.d)) {
-      nall::GDB::server.updateLoop();
+      // Preserve the instruction boundary, but let the frontend service its
+      // UI/quit/settings guard while stopped. It owns the RSP polling loop.
+      scheduler.exit(Event::Step);
     }
+    auto& trace = nall::GDB::server;
+    if(trace.detailedTraceActive()) {
+      trace.beginInstructionTrace(r.pc.d, {u16(r.a.w), u16(r.x.w), u16(r.y.w), u16(r.s.w), u16(r.d.w), u16(r.b), u16(r.pc.b), u16(r.pc.w), u16(r.p), u16(r.e)});
+      debugger.instruction();
+      instruction();
+      trace.endInstructionTrace();
+      return;
+    }
+    trace.reportInstruction(r.pc.d);
     debugger.instruction();
     return instruction();
   }
