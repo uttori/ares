@@ -4,6 +4,8 @@
 using namespace nall;
 #include <ares/types.hpp>
 #include <component/processor/wdc65816/wdc65816.hpp>
+// nall defines NDEBUG from BUILD_RELEASE even when the compiler uses -UNDEBUG.
+#undef NDEBUG
 #include <cassert>
 #include <iostream>
 using namespace nall;
