@@ -236,6 +236,7 @@ auto System::power(bool reset) -> void {
   random.entropy(Random::Entropy::Low);
   if(deterministicEntropy) random.seed((n64)0);
 
+  nall::GDB::server.capture.clockRate(region() == Region::NTSC ? 236250000 : 21281370, region() == Region::NTSC ? 11 : 1);
   cpu.power(reset);
   smp.power(reset);
   dsp.power(reset);

@@ -83,7 +83,7 @@ namespace nall::GDB {
     }
   }
 
-  auto Server::reportPC(u64 pc) -> bool {
+  auto Server::reportPC(u64 pc, bool advanceStep) -> bool {
     if(!hasActiveClient)return true;
 
     currentPC = pc;
@@ -99,7 +99,7 @@ namespace nall::GDB {
       }
     }
 
-    if(singleStepActive) {
+    if(singleStepActive && advanceStep) {
       singleStepActive = false;
       forceHalt = true;
     }
@@ -292,9 +292,32 @@ namespace nall::GDB {
       break;
 
       case 'q':
+        if(cmdName == "qUttoriCapture" || cmdName == "qUttoriCaptureFile") {
+          if(!hooks.instructionTraceDetails || instructionTraceActive) return "E09";
+          std::string response;
+          if(cmdName == "qUttoriCaptureFile") {
+            response = captureFile.command(capture, std::string(cmd.data() + 19), isHalted());
+          } else {
+            // File delivery owns the retained queue until publication or explicit
+            // failed-session release; a second consumer must never steal its ACK.
+            auto request = std::string(cmd.data() + 15);
+            if(captureFile.owns() && request != "capabilities" && request != "bus-capabilities"
+              && request != "transfer-capabilities" && request != "ppu-capabilities") return "E09";
+            response = capture.command(request);
+          }
+          // JSON includes RSP's escape marker '}'. Keep this private control
+          // payload hexadecimal, just like register and memory responses.
+          if(!response.empty() && response[0] == '{') {
+            string encoded = "J";
+            for(unsigned char byte : response) encoded.append(hex(byte, 2, '0'));
+            return encoded;
+          }
+          return response.c_str();
+        }
+
         // This tells the client what we can and can't do
         if(cmdName == "qSupported"){ return {
-          "PacketSize=", hex(MAX_PACKET_SIZE),
+          "PacketSize=", hex(hooks.instructionTraceDetails ? ares_capture::Capture::chunkBytes * 2 : MAX_PACKET_SIZE),
           ";fork-events-;swbreak+;hwbreak-",
           ";vContSupported-", // prevent vCont commands (reduces potential GDB variations: some prefer using it, others don't)
           ";QPassSignals+", // let the client ask us to swallow chosen signals
@@ -304,7 +327,7 @@ namespace nall::GDB {
           hooks.instructionBoundaryStop ? ";uttoriInstructionBoundaryStop+" : "",
           hooks.namedMemoryRead ? ";uttoriNamedMemory+" : "",
           hooks.instructionTrace ? ";uttoriInstructionTrace+" : "",
-          hooks.instructionTraceDetails ? ";uttoriInstructionDetails+;uttoriSramMemory+;uttoriAramMemory+" : ""
+          hooks.instructionTraceDetails ? ";uttoriInstructionDetails+;uttoriSramMemory+;uttoriAramMemory+;uttoriCaptureV2+" : ""
         };}
 
         if(cmdName == "qUttoriMemoryRead") {
@@ -403,6 +426,7 @@ namespace nall::GDB {
         }
 
         if(cmdName == "QUttoriTrace") {
+          if(capture.active() || capture.pendingInstruction()) return "E09";
           if(!hooks.instructionTrace || cmdParts.size() != 2) return "E00";
           if(cmdParts[1] == "1" || cmdParts[1] == "2") {
             if(cmdParts[1] == "2" && !hooks.instructionTraceDetails) return "E00";
@@ -585,6 +609,9 @@ namespace nall::GDB {
   }
 
   auto Server::updateLoop() -> void {
+    // Runs at scheduler exits, including backpressure and independent GDB stops.
+    // Disk writes/syncs stay on the worker; this only copies/reclaims a bounded batch.
+    captureFile.service(capture);
     if(!isStarted())return;
 
     if(requestDisconnect) {
@@ -669,6 +696,7 @@ namespace nall::GDB {
   }
 
   auto Server::onDisconnect() -> void {
+    capture.fail("disconnect");
     if (hasActiveClient)
       printf("GDB client disconnected\n");
     hadHandshake = false;
@@ -676,6 +704,7 @@ namespace nall::GDB {
   }
 
   auto Server::reset() -> void {
+    capture.fail("reset");
     hooks.read = nullptr;
     hooks.namedMemoryRead = nullptr;
     hooks.write = nullptr;

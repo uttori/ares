@@ -1,4 +1,5 @@
 #include <sfc/sfc.hpp>
+#include <nall/gdb/server.hpp>
 
 #undef ppu
 #define PPU PPUPerformance

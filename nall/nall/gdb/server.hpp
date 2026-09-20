@@ -3,6 +3,8 @@
 #include <nall/tcptext/tcptext-server.hpp>
 #include <nall/gdb/watchpoint.hpp>
 #include <array>
+#include <nall/gdb/capture.hpp>
+#include <nall/gdb/capture-file.hpp>
 #include <functional>
 
 namespace nall::GDB {
@@ -64,6 +66,7 @@ enum class Signal : u8 {
 class Server : public nall::TCPText::Server {
   public:
 
+    ares_capture::Capture capture;
     auto reset() -> void;
 
     struct {
@@ -95,7 +98,7 @@ class Server : public nall::TCPText::Server {
     auto reportSignal(Signal sig, u64 originPC) -> bool;
 
     // PC / Memory State Updates
-    auto reportPC(u64 pc) -> bool;
+    auto reportPC(u64 pc, bool advanceStep = true) -> bool;
     auto reportInstruction(u64 pc) -> void;
     auto beginInstructionTrace(u64 pc, const std::array<u16, 10>& state) -> void;
     auto traceFetch(u64 address, u8 value) -> void;
@@ -183,6 +186,11 @@ class Server : public nall::TCPText::Server {
 
     auto haltProgram() -> void;
     auto resumeProgram() -> void;
+
+  public:
+    // Keep optional sink bookkeeping after existing debugger fields. Their
+    // offsets are read on every CPU/bus access, even with capture disabled.
+    ares_capture::FileCapture captureFile;
 };
 
 extern Server server;
