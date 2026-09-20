@@ -1,7 +1,7 @@
 namespace {
 auto installGdbMemoryHooks() -> void {
   nall::GDB::server.hooks.read = [](u64 address, u32 size) -> string {
-    // RSP m reads are exact. Do not alias invalid addresses or synthesize MMIO.
+    // RSP m reads are exact. We do not alias invalid addresses or synthesize MMIO.
     if(address > 0xff'ffff || size > 0x100'0000 - address || size > 0x2000) return "E00";
     string result;
     result.reserve(size * 2);
