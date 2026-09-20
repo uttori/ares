@@ -1,4 +1,5 @@
 struct CPU : WDC65816, Thread, PPUcounter {
+  uint64_t captureClock = 0;
   Node::Object node;
   Node::Setting::Natural version;
 
@@ -44,8 +45,13 @@ struct CPU : WDC65816, Thread, PPUcounter {
   auto hdmaRun() -> void;
 
   //memory.cpp
+  // Bus capture yields before an access; phase/channel use the private ACT2
+  // dictionary (CPU=0, DMA=1, HDMA table/indirect/data=2/3/4; CPU channel=255).
+  auto captureBusReady() -> void;
+  auto captureBus(n24 address, n8 data, bool write, u8 phase = 0, u8 channel = 0xff) -> void;
   auto idle() -> void override;
   auto read(n24 address) -> n8 override;
+  auto instructionFetch(n24 address, n8 value) -> void override;
   auto write(n24 address, n8 data) -> void override;
   auto wait(n24 address) const -> u32;
   auto readDisassembler(n24 address) -> n8 override;
@@ -193,12 +199,15 @@ private:
     auto edge() -> void;
 
     auto validA(n24 address) -> bool;
-    auto readA(n24 address) -> n8;
-    auto readB(n8 address, bool valid) -> n8;
-    auto writeA(n24 address, n8 data) -> void;
-    auto writeB(n8 address, n8 data, bool valid) -> void;
-    auto transfer(n24 address, n2 index) -> void;
+    // Explicit phase survives HDMA preemption clearing dmaEnable mid-transfer.
+    auto readA(n24 address, u8 phase = 1) -> n8;
+    auto readB(n8 address, bool valid, u8 phase) -> n8;
+    auto writeA(n24 address, n8 data, u8 phase) -> void;
+    auto writeB(n8 address, n8 data, bool valid, u8 phase) -> void;
+    auto transfer(n24 address, n2 index, bool hdma = false) -> void;
 
+    // Boundary tokens are capture-only, stack-owned and deliberately never serialized.
+    auto captureTransfer(u8 boundary, bool hdma, u32 transferred, std::array<uint64_t, 3> token = {}) -> std::array<uint64_t, 3>;
     auto dmaRun() -> void;
     auto hdmaActive() -> bool;
     auto hdmaFinished() -> bool;

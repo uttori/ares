@@ -83,13 +83,14 @@ namespace nall::GDB {
     }
   }
 
-  auto Server::reportPC(u64 pc, bool instruction) -> bool {
+  auto Server::reportPC(u64 pc, bool instruction, bool canExecute) -> bool {
     if(!hasActiveClient)return true;
 
     bool skipBreakpoint = skipBreakpointOnce && currentPC == pc;
     currentPC = pc;
     bool needHalts = forceHalt || (instruction && !skipBreakpoint && std::ranges::find(breakpoints, pc) != breakpoints.end());
-    skipBreakpointOnce = false;
+    // Repeated capacity waits revisit this same boundary before any instruction runs.
+    if(instruction && canExecute) skipBreakpointOnce = false;
     stoppedAtInstructionBoundary = hooks.instructionBoundaryStop && needHalts;
 
     if(needHalts) {
@@ -106,7 +107,7 @@ namespace nall::GDB {
       }
     }
 
-    if(singleStepActive) {
+    if(singleStepActive && instruction && canExecute) {
       singleStepActive = false;
       forceHalt = true;
     }
@@ -122,6 +123,52 @@ namespace nall::GDB {
   auto Server::hasWatchpoints() const -> bool {
     if(!hasActiveClient) return false;
     return !watchpointRead.empty() || !watchpointWrite.empty();
+  }
+
+  auto Server::reportInstruction(u64 pc) -> void {
+    if(!instructionTraceActive) return;
+    if(instructionTraceSize == instructionTraceCapacity) {
+      instructionTraceHead = (instructionTraceHead + 1) % instructionTraceCapacity;
+      instructionTraceSize--;
+      instructionTraceDroppedEvents++;
+    }
+    instructionTraceAddresses[(instructionTraceHead + instructionTraceSize) % instructionTraceCapacity] = pc;
+    instructionTraceSize++;
+    instructionTraceNextSequence++;
+  }
+
+  auto Server::beginInstructionTrace(u64 pc, const std::array<u16, 10>& state) -> void {
+    if(!detailedTraceActive()) return;
+    pendingTrace = {};
+    pendingTrace.pc = pc;
+    pendingTrace.state = state;
+    pendingTraceActive = true;
+  }
+
+  auto Server::traceMemory(u64 address, u8 value, u8 access, u8 actor, u8 channel) -> void {
+    if(!pendingTraceActive) {
+      if(detailedTraceActive()) unattributedTraceMemory++;
+      return;
+    }
+    if(pendingTrace.memoryCount == pendingTrace.memory.size()) { pendingTrace.dropped++; return; }
+    pendingTrace.memory[pendingTrace.memoryCount++] = {address, value, access, actor, channel};
+  }
+
+  auto Server::traceFetch(u64 address, u8 value) -> void {
+    if(!pendingTraceActive) return;
+    if(pendingTrace.byteCount < pendingTrace.bytes.size()) pendingTrace.bytes[pendingTrace.byteCount++] = value;
+    if(pendingTrace.memoryCount) {
+      auto& last = pendingTrace.memory[pendingTrace.memoryCount - 1];
+      if(last.actor == 0 && last.address == address) last.access = 2;
+    }
+  }
+
+  auto Server::endInstructionTrace() -> void {
+    if(!pendingTraceActive) return;
+    pendingTraceActive = false;
+    if(!instructionTraceActive) return;
+    reportInstruction(pendingTrace.pc);
+    instructionTraceDetails[(instructionTraceHead + instructionTraceSize - 1) % instructionTraceCapacity] = pendingTrace;
   }
 
   /**
@@ -306,16 +353,98 @@ namespace nall::GDB {
           shouldReply = false; // complete monitor reset halt at the reset-vector boundary
           return "";
         }
+        if(cmdName == "qUttoriCapture" || cmdName == "qUttoriCaptureFile") {
+          if(!hooks.instructionTraceDetails || instructionTraceActive) return "E09";
+          std::string response;
+          if(cmdName == "qUttoriCaptureFile") {
+            response = captureFile.command(capture, std::string(cmd.data() + 19), isHalted());
+          } else {
+            // File delivery owns the retained queue until publication or explicit
+            // failed-session release; a second consumer must never steal its ACK.
+            auto request = std::string(cmd.data() + 15);
+            if(captureFile.owns() && request != "capabilities" && request != "bus-capabilities"
+              && request != "transfer-capabilities" && request != "ppu-capabilities") return "E09";
+            response = capture.command(request);
+          }
+          // JSON includes RSP's escape marker '}'. Keep this private control
+          // payload hexadecimal, just like register and memory responses.
+          if(!response.empty() && response[0] == '{') {
+            string encoded = "J";
+            for(unsigned char byte : response) encoded.append(hex(byte, 2, '0'));
+            return encoded;
+          }
+          return response.c_str();
+        }
+
+        // The '?' reply is already deferred to a coherent stop. Do not advertise
+        // uttoriInstructionBoundaryStop: old clients interpret it as a second stop packet.
         // This tells the client what we can and can't do
         if(cmdName == "qSupported"){ return {
-          "PacketSize=", hex(MAX_PACKET_SIZE),
+          "PacketSize=", hex(hooks.instructionTraceDetails ? ares_capture::Capture::chunkBytes * 2 : MAX_PACKET_SIZE),
           ";fork-events-;swbreak+;hwbreak-",
           ";vContSupported-", // prevent vCont commands (reduces potential GDB variations: some prefer using it, others don't)
           ";QPassSignals+", // let the client ask us to swallow chosen signals
           NON_STOP_MODE ? ";QNonStop+" : "",
           "QStartNoAckMode+",
-          hooks.targetXML ? ";xmlRegisters+;qXfer:features:read+" : "" // (see: https://marc.info/?l=gdb&m=149901965961257&w=2)
+          hooks.targetXML ? ";xmlRegisters+;qXfer:features:read+" : "", // (see: https://marc.info/?l=gdb&m=149901965961257&w=2)
+          hooks.namedMemoryRead ? ";uttoriNamedMemory+" : "",
+          hooks.instructionTrace ? ";uttoriInstructionTrace+" : "",
+          hooks.instructionTraceDetails ? ";uttoriInstructionDetails+;uttoriSramMemory+;uttoriAramMemory+;uttoriCaptureV2+" : ""
         };}
+
+        if(cmdName == "qUttoriMemoryRead") {
+          if(!hooks.namedMemoryRead || cmdParts.size() != 3) return "E00";
+          auto sepIdxMaybe = cmdParts[2].find(",");
+          if(!sepIdxMaybe) return "E00";
+          u32 sepIdx = sepIdxMaybe.get();
+          if(sepIdx == 0 || sepIdx + 1 >= cmdParts[2].size()) return "E00";
+          u64 address = cmdParts[2].slice(0, sepIdx).hex();
+          u64 count = cmdParts[2].slice(sepIdx + 1).hex();
+          if(count > MAX_PACKET_SIZE / 2) return "E00";
+          return hooks.namedMemoryRead(cmdParts[1], address, count);
+        }
+
+        if(cmdName == "qUttoriTraceRead" || cmdName == "qUttoriTraceDetailRead") {
+          bool detailed = cmdName == "qUttoriTraceDetailRead";
+          if(detailed != instructionTraceFull) return "E00";
+          if(!hooks.instructionTrace || cmdParts.size() != 2) return "E00";
+          u64 requested = cmdParts[1].hex();
+          if(requested == 0 || requested > 240) return "E00";
+          u32 count = min<u64>(requested, instructionTraceSize);
+          u64 sequenceStart = instructionTraceNextSequence - instructionTraceSize;
+          string result{
+            instructionTraceActive ? "1:" : "0:",
+            hex(sequenceStart), ":",
+            hex(instructionTraceDroppedEvents), ":"
+          };
+          result.reserve(result.size() + count * 16);
+          if(detailed) result.append(hex(unattributedTraceMemory), ":");
+          u32 delivered = 0;
+          for(u32 index : range(count)) {
+            string row;
+            auto slot = (instructionTraceHead + index) % instructionTraceCapacity;
+            row.append(hex(instructionTraceAddresses[slot], 16, '0'));
+            if(detailed) {
+              const auto& detail = instructionTraceDetails[slot];
+              row.append(",");
+              for(auto value : detail.state) row.append(hex(value, 4, '0'));
+              row.append(",");
+              for(u32 byte : range(detail.byteCount)) row.append(hex(detail.bytes[byte], 2, '0'));
+              row.append(",", hex(detail.dropped), ",");
+              for(u32 access : range(detail.memoryCount)) {
+                const auto& memory = detail.memory[access];
+                row.append(hex(memory.address, 16, '0'), hex(memory.value, 2, '0'), hex(memory.access, 1, '0'), hex(memory.actor, 1, '0'), hex(memory.channel, 1, '0'));
+              }
+              row.append(";");
+            }
+            if(result.size() + row.size() > MAX_PACKET_SIZE) break;
+            result.append(row);
+            delivered++;
+          }
+          instructionTraceHead = (instructionTraceHead + delivered) % instructionTraceCapacity;
+          instructionTraceSize -= delivered;
+          return result;
+        }
 
         // handshake-command, most return dummy values to convince gdb to connect
         if(cmdName == "qTStatus")return forceHalt ? "T1" : "";
@@ -358,7 +487,7 @@ namespace nall::GDB {
         if(cmdName == "qThreadExtraInfo,1")return ""; // ignoring this command fixes support for CLion (and VSCode?), otherwise gdb hangs
         if(cmdName == "qC")return {"QC1"};
         // there will also be a "qP0000001f0000000000000001" command depending on the IDE, this is ignored to prevent GDB from hanging up
-        break;
+      break;
 
       case 'Q':
         if(cmdName == "QPassSignals") { // e.g. "QPassSignals:0b;0e" (hex signal numbers); empty list = clear
@@ -369,6 +498,31 @@ namespace nall::GDB {
             }
           }
           return "OK";
+        }
+
+        if(cmdName == "QUttoriTrace") {
+          if(capture.active() || capture.pendingInstruction()) return "E09";
+          if(!hooks.instructionTrace || cmdParts.size() != 2) return "E00";
+          if(cmdParts[1] == "1" || cmdParts[1] == "2") {
+            if(cmdParts[1] == "2" && !hooks.instructionTraceDetails) return "E00";
+            instructionTraceFull = cmdParts[1] == "2";
+            pendingTraceActive = false;
+            if(instructionTraceFull) instructionTraceDetails.resize(instructionTraceCapacity);
+            instructionTraceHead = 0;
+            instructionTraceSize = 0;
+            instructionTraceNextSequence = 1;
+            instructionTraceDroppedEvents = 0;
+            unattributedTraceMemory = 0;
+            instructionTraceActive = true;
+            return "OK";
+          }
+          if(cmdParts[1] == "0") {
+            if(pendingTraceActive) unattributedTraceMemory += pendingTrace.memoryCount + pendingTrace.dropped;
+            instructionTraceActive = false;
+            pendingTraceActive = false;
+            return "OK";
+          }
+          return "E00";
         }
 
         if(cmdName == "QNonStop") { // 0=stop, 1=non-stop-mode (this allows for async GDB-communication)
@@ -530,6 +684,9 @@ namespace nall::GDB {
   }
 
   auto Server::updateLoop() -> void {
+    // Runs at scheduler exits, including backpressure and independent GDB stops.
+    // Disk writes/syncs stay on the worker; this only copies/reclaims a bounded batch.
+    captureFile.service(capture);
     if(!isStarted())return;
 
     if(requestDisconnect) {
@@ -615,6 +772,7 @@ namespace nall::GDB {
   }
 
   auto Server::onDisconnect() -> void {
+    capture.fail("disconnect");
     if (hasActiveClient)
       printf("GDB client disconnected\n");
     hadHandshake = false;
@@ -622,7 +780,9 @@ namespace nall::GDB {
   }
 
   auto Server::reset() -> void {
+    capture.fail("reset");
     hooks.read = nullptr;
+    hooks.namedMemoryRead = nullptr;
     hooks.write = nullptr;
     hooks.normalizeAddress = nullptr;
     hooks.registersLittleEndian = false;
@@ -634,6 +794,8 @@ namespace nall::GDB {
     hooks.emuReset = nullptr;
     hooks.emuCacheInvalidate = nullptr;
     hooks.targetXML = nullptr;
+    hooks.instructionTrace = false;
+    hooks.instructionTraceDetails = false;
 
     resetClientData();
   }
@@ -659,6 +821,13 @@ namespace nall::GDB {
     stoppedAtInstructionBoundary = false;
     skipBreakpointOnce = false;
     pendingResetReply = false;
+    instructionTraceHead = 0;
+    instructionTraceSize = 0;
+    instructionTraceNextSequence = 1;
+    instructionTraceDroppedEvents = 0;
+    instructionTraceActive = false;
+    instructionTraceFull = false;
+    pendingTraceActive = false;
     nonStopMode = false;
     noAckMode = false;
 
