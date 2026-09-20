@@ -1,4 +1,34 @@
+auto CPU::captureBusReady() -> void {
+  auto& capture = nall::GDB::server.capture;
+  // Keep disabled and instruction-only capture out of the per-access PPU path.
+  if(!capture.busActive()) return;
+  // The coroutine retains the exact transfer continuation. Do not acknowledge a
+  // debugger stop or synchronize a save here: this may be mid-instruction/DMA.
+  // Stop/abort releases this reservation wait; failed capture holds at CPU::main.
+  while(capture.busActive() && !capture.ready()) scheduler.exit(Event::Step);
+  capture.ppuReset();
+}
+
+auto CPU::captureBus(n24 address, n8 data, bool write, u8 phase, u8 channel) -> void {
+  auto& capture = nall::GDB::server.capture;
+  if(!capture.busActive()) return;
+  using Context = ares_capture::Capture::BusContext;
+  auto context = Context::Unattributed;
+  if(status.interruptPending) context = Context::Interrupt;
+  if(r.wai) context = Context::Wait;
+  if(r.stp) context = Context::Stop;
+  capture.bus(address, data, write, ares_capture::Capture::BusPhase(phase), channel,
+    context, r.pc.d, captureClock, hcounter(), vcounter());
+}
+
 auto CPU::idle() -> void {
+  if(r.wai || r.stp) {
+    nall::GDB::server.capture.end();
+    while(!nall::GDB::server.reportPC(r.pc.d, false) || !nall::GDB::server.capture.ready()) {
+      scheduler.exit(Event::Step);
+      scheduler.synchronize();
+    }
+  }
   status.clockCount = 6;
   dmaEdge();
   step(6);
@@ -10,7 +40,9 @@ auto CPU::read(n24 address) -> n8 {
   dmaEdge();
   r.mar = address;
   step(status.clockCount - 4);
+  captureBusReady();
   auto data = bus.read(address, r.mdr);
+  captureBus(address, data, false);
   step(4);
   aluEdge();
   //$00-3f,80-bf:4000-43ff reads are internal to CPU, and do not update the MDR
@@ -25,7 +57,9 @@ auto CPU::write(n24 address, n8 data) -> void {
   dmaEdge();
   r.mar = address;
   step(status.clockCount);
+  captureBusReady();
   bus.write(address, r.mdr = data);
+  captureBus(address, data, true);
   nall::GDB::server.traceMemory(address, data, 1);
 }
 
@@ -49,4 +83,5 @@ auto CPU::readDisassembler(n24 address) -> n8 {
 
 auto CPU::instructionFetch(n24 address, n8 value) -> void {
   nall::GDB::server.traceFetch(address, value);
+  nall::GDB::server.capture.fetch(value);
 }

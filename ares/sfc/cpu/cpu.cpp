@@ -22,6 +22,7 @@ auto CPU::load(Node::Object parent) -> void {
 }
 
 auto CPU::unload() -> void {
+  nall::GDB::server.capture.fail("unload");
   version = {};
   debugger = {};
   node = {};
@@ -32,7 +33,11 @@ auto CPU::main() -> void {
   if(r.stp) return instructionStop();
 
   if(!status.interruptPending) {
-    while(!nall::GDB::server.reportPC(r.pc.d)) {
+    auto runnable = [&] {
+      bool room = nall::GDB::server.capture.ready();
+      return nall::GDB::server.reportPC(r.pc.d, room) && room;
+    };
+    while(!runnable()) {
       // Preserve the instruction boundary, but let the frontend service its
       // UI/quit/settings guard while stopped. It owns the RSP polling loop.
       scheduler.exit(Event::Step);
@@ -41,6 +46,13 @@ auto CPU::main() -> void {
       scheduler.synchronize();
     }
     auto& trace = nall::GDB::server;
+    if(trace.capture.active()) {
+      trace.capture.begin(r.pc.d, {u16(r.a.w), u16(r.x.w), u16(r.y.w), u16(r.s.w), u16(r.d.w), u16(r.b), u16(r.pc.b), u16(r.pc.w), u16(r.p), u16(r.e)}, captureClock);
+      debugger.instruction();
+      instruction();
+      trace.capture.end();
+      return;
+    }
     if(trace.detailedTraceActive()) {
       trace.beginInstructionTrace(r.pc.d, {u16(r.a.w), u16(r.x.w), u16(r.y.w), u16(r.s.w), u16(r.d.w), u16(r.b), u16(r.pc.b), u16(r.pc.w), u16(r.p), u16(r.e)});
       debugger.instruction();
@@ -101,6 +113,8 @@ auto CPU::map() -> void {
 }
 
 auto CPU::power(bool reset) -> void {
+  nall::GDB::server.capture.fail("power-reset");
+  captureClock = 0;
   WDC65816::power();
   create(system.cpuFrequency(), std::bind_front(&CPU::main, this));
   coprocessors.clear();
