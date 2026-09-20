@@ -1,5 +1,5 @@
-// The register description is for 65816-aware RSP consumers. Stock GDB has no
-// current 65816 target backend; XML does not add a disassembler or an ABI.
+// The register description is for 65816-aware RSP consumers.
+// Stock GDB has no current 65816 target backend and the XML does not add a disassembler or an ABI.
 namespace {
 auto gdbRegisterBytes(u64 value, u32 size) -> string {
   string result;

@@ -82,7 +82,7 @@ auto Bus::map(
 }
 
 // Storage inspection never calls bus handlers, cheats, or synchronization.
-// Device-backed ranges are unavailable until they supply an explicit safe peek.
+// Device backed ranges are unavailable until they supply an explicit safe peek.
 auto Bus::peek(n24 address) const -> maybe<n8> {
   if(!lookup || !target) return {};
   auto id = lookup[address];

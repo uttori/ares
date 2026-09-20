@@ -96,10 +96,9 @@ auto Program::emulatorRunLoop(uintptr_t) -> void {
 
     bool defocused = settings.input.defocus == "Pause" && !ruby::video.fullScreen() && !presentation.focused();
 
-    // A pending stop needs to reach the next CPU boundary, even if the desktop
-    // is paused/defocused. Once there, ordinary pause state remains unchanged.
-    if(!nall::GDB::server.isStopPending()
-    && ((paused && !program.requestFrameAdvance) || defocused)) {
+    // A pending stop needs to reach the next CPU boundary, even if the desktop is paused / lost focus.
+    // Once there the ordinary pause state remains unchanged.
+    if(!nall::GDB::server.isStopPending() && ((paused && !program.requestFrameAdvance) || defocused)) {
       ruby::audio.clear();
       nall::GDB::server.updateLoop();
       usleep(20 * 1000);
@@ -152,7 +151,7 @@ auto Program::main() -> void {
     quit();
     return;
   }
-  
+
   inputManager.poll();
   inputManager.pollHotkeys();
 
@@ -160,7 +159,7 @@ auto Program::main() -> void {
 
   //If Platform::video() changed the screen resolution, resize the presentation window here.
   //Window operations must be performed from the main thread.
-  
+
   if(_needsResize) {
     if(settings.video.adaptiveSizing && !startPseudoFullScreen) presentation.resizeWindow();
     _needsResize = false;
