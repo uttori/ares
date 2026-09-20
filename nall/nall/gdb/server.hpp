@@ -3,6 +3,8 @@
 #include <nall/tcptext/tcptext-server.hpp>
 #include <nall/gdb/watchpoint.hpp>
 #include <array>
+#include <nall/gdb/capture.hpp>
+#include <nall/gdb/capture-file.hpp>
 #include <functional>
 
 namespace nall::GDB {
@@ -64,11 +66,14 @@ enum class Signal : u8 {
 class Server : public nall::TCPText::Server {
   public:
 
+    // Lossless evidence queue, owned and advanced by the emulation thread.
+    ares_capture::Capture capture;
     auto reset() -> void;
 
     struct {
       // Memory
       std::function<string(u64 address, u32 byteCount)> read{};
+      std::function<string(const string& addressSpace, u64 address, u32 byteCount)> namedMemoryRead{};
       std::function<void(u64 address, std::vector<u8> value)> write{};
       std::function<u64(u64 address)> normalizeAddress{};
 
@@ -84,6 +89,8 @@ class Server : public nall::TCPText::Server {
       std::function<void()> emuReset{};
       std::function<void(u64 address)> emuCacheInvalidate{};
       std::function<string()> targetXML{};
+      bool instructionTrace{};
+      bool instructionTraceDetails{};
 
 
     } hooks{};
@@ -94,7 +101,19 @@ class Server : public nall::TCPText::Server {
     auto reportSignal(Signal sig, u64 originPC) -> bool;
 
     // PC / Memory State Updates
-    auto reportPC(u64 pc, bool instruction = true) -> bool;
+    // Report a coherent CPU boundary. Idle boundaries do not hit code breakpoints;
+    // canExecute=false preserves a pending step and breakpoint bypass under capture backpressure.
+    auto reportPC(u64 pc, bool instruction = true, bool canExecute = true) -> bool;
+    auto reportInstruction(u64 pc) -> void;
+    // Legacy bounded trace: latch pre-instruction registers and publish only at end.
+    // Register order is A/X/Y/S/D/DB/PB/PC/P/E; byte and access overflow is counted.
+    auto beginInstructionTrace(u64 pc, const std::array<u16, 10>& state) -> void;
+    // Tag bytes obtained by real CPU fetches; never read the bus to synthesize evidence.
+    auto traceFetch(u64 address, u8 value) -> void;
+    auto traceMemory(u64 address, u8 value, u8 access, u8 actor = 0, u8 channel = 15) -> void;
+    auto endInstructionTrace() -> void;
+    auto detailedTraceActive() const -> bool { return instructionTraceActive && instructionTraceFull; }
+
     auto reportMemRead(u64 address, u32 size) -> void;
     auto reportMemWrite(u64 address, u32 size) -> void;
 
@@ -128,6 +147,27 @@ class Server : public nall::TCPText::Server {
     bool skipBreakpointOnce{false};
     bool pendingResetReply{false};
 
+    // The legacy ring overwrites oldest entries and counts loss; Capture uses backpressure.
+    static constexpr u32 instructionTraceCapacity = 65536;
+    std::array<u64, instructionTraceCapacity> instructionTraceAddresses{};
+    u32 instructionTraceHead{0};
+    u32 instructionTraceSize{0};
+    u64 instructionTraceNextSequence{1};
+    u64 instructionTraceDroppedEvents{0};
+    bool instructionTraceActive{false};
+    struct TraceMemory { u64 address{}; u8 value{}, access{}, actor{}, channel{}; };
+    struct TraceDetail {
+      std::array<u16, 10> state{};
+      std::array<u8, 4> bytes{};
+      std::array<TraceMemory, 32> memory{};
+      u64 pc{}, dropped{};
+      u8 byteCount{}, memoryCount{};
+    };
+    std::vector<TraceDetail> instructionTraceDetails;
+    TraceDetail pendingTrace{};
+    bool instructionTraceFull{false}, pendingTraceActive{false};
+    u64 unattributedTraceMemory{0};
+
     bool noAckMode{false}; // gets set if lldb prefers no acknowledgements
     bool nonStopMode{false}; // (NOTE: Not working for now), gets set if gdb wants to switch over to async-messaging
     bool handshakeDone{false}; // set to true after a few handshake commands, used to prevent exception-reporting until client is ready
@@ -157,6 +197,11 @@ class Server : public nall::TCPText::Server {
 
     auto haltProgram() -> void;
     auto resumeProgram() -> void;
+
+  public:
+    // Keep optional sink bookkeeping after existing debugger fields. Their
+    // offsets are read on every CPU/bus access, even with capture disabled.
+    ares_capture::FileCapture captureFile;
 };
 
 extern Server server;

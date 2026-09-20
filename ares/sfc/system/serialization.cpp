@@ -1,6 +1,12 @@
 static const string SerializerVersion = "v147";
 
 auto System::serialize(bool synchronize) -> serializer {
+  // Bus backpressure may suspend a transfer between accesses, where a normal
+  // synchronized state cannot restore its coroutine continuation. End evidence
+  // before synchronization so the core can reach its usual safe save boundary.
+  if(synchronize && nall::GDB::server.capture.busActive()) {
+    nall::GDB::server.capture.fail("state-save");
+  }
   if(synchronize) scheduler.enter(Scheduler::Mode::Synchronize);
   serializer s;
 
@@ -36,6 +42,7 @@ auto System::unserialize(serializer& s) -> bool {
   if(string{version} != SerializerVersion) return false;
   if(ppuAccurate != ppu.accurate) return false;
 
+  nall::GDB::server.capture.fail("state-load");
   if(synchronize) power(/* reset = */ false);
   serialize(s, synchronize);
   // Keep the acknowledged stop at the restored boundary.

@@ -13,6 +13,7 @@ auto CPU::step(u32 clocks) -> void {
   u32 ticks = clocks >> 1;
   while(ticks--) {
     counter.cpu += 2;
+    captureClock += 2;
     tick();
     if(hcounter() & 2) nmiPoll(), irqPoll();
     if(joypadCounter() == 0) joypadEdge();

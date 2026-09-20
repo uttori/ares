@@ -28,7 +28,10 @@ inline auto WDC65816::idle6(n16 address) -> void {
 }
 
 inline auto WDC65816::fetch() -> n8 {
-  return read(PC.b << 16 | PC.w++);
+  n24 address = PC.b << 16 | PC.w++;
+  auto value = read(address);
+  instructionFetch(address, value);
+  return value;
 }
 
 inline auto WDC65816::pull() -> n8 {
