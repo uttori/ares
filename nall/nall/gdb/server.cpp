@@ -107,7 +107,9 @@ namespace nall::GDB {
       }
     }
 
-    if(singleStepActive && instruction && canExecute) {
+    // Stepping WAI/STP advances one idle boundary, as in the upstream debugger.
+    // Only capture backpressure defers consuming the requested step.
+    if(singleStepActive && canExecute) {
       singleStepActive = false;
       forceHalt = true;
     }
