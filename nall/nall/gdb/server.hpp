@@ -75,6 +75,8 @@ class Server : public nall::TCPText::Server {
       std::function<string(u64 address, u32 byteCount)> read{};
       std::function<string(const string& addressSpace, u64 address, u32 byteCount)> namedMemoryRead{};
       std::function<void(u64 address, std::vector<u8> value)> write{};
+      // Optional atomic writer: validate the complete range before mutation and return OK or an RSP error.
+      std::function<string(u64 address, const std::vector<u8>& value)> checkedWrite{};
       std::function<u64(u64 address)> normalizeAddress{};
 
       // Registers

@@ -25,6 +25,21 @@ auto nall::main(Arguments) -> void {
     assert(reads == 0);
   }
   assert(command("m7e0000,1") == "12" && reads == 1);
+  unsigned writes = 0;
+  server.hooks.checkedWrite = [&](u64 address, const std::vector<u8>& bytes) -> string {
+    ++writes;
+    assert(address == 0x7e0000);
+    assert(bytes.size() == 16 && bytes.front() == 0 && bytes.back() == 15);
+    return "OK";
+  };
+  for(auto invalid : {"M", "M0", "M,1:00", "M0,:00", "Mxyz,1:00", "M0,xyz:00", "M0,1,2:00",
+      "M10000000000000000,1:00", "M0,10000000000000001:00", "M0,1:0", "M0,1:0000",
+      "M0,1:gg", "M0,1:00:00", "M0,100000:00"}) {
+    assert(command(invalid) == "E00");
+    assert(writes == 0);
+  }
+  assert(command("M7e0000,10:000102030405060708090a0b0c0d0e0f") == "OK" && writes == 1);
   server.reset();
+  assert(!server.hooks.checkedWrite);
   std::cout << "PASS U4 packets: invalid hex, missing fields, excess fields, overflow and oversized reads never invoke storage\n";
 }

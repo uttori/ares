@@ -67,6 +67,8 @@ auto nall::main(Arguments arguments) -> void {
 
   headless::Runtime runtime;
   runtime.runFramesTarget = cli.runFramesTarget;
+  runtime.inputPresses = cli.inputPresses;
+  runtime.ramCheats = cli.ramCheats;
   runtime.stateSlot = cli.stateSlot;
   runtime.gdbEnabled = cli.launchSettings.gdbEnabled;
   runtime.gdbPort = cli.launchSettings.gdbPort;

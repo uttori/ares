@@ -36,6 +36,16 @@ auto nall::main(Arguments) -> void {
   assert(read(0x1000000, 1) == "E00");
   assert(read(0x7e0000, 0x2001) == "E00");
   assert(!reads);
+  auto& server = nall::GDB::server;
+  assert(server.hooks.checkedWrite(0x7e0000, {0x78}) == "E09");
+  server.forceHalt = true; server.haltSignalSent = true;
+  const auto clock = cpu.captureClock;
+  assert(server.hooks.checkedWrite(0x7fffff, {0x12, 0x34}) == "E00");
+  assert(server.hooks.checkedWrite(0x002100, {0x80}) == "E00");
+  assert(cpu.wram[0x1ffff] == 0x56 && !reads);
+  assert(server.hooks.checkedWrite(0x7e0000, {0x78, 0x9a}) == "OK");
+  assert(cpu.wram[0] == 0x78 && cpu.wram[1] == 0x9a && cpu.captureClock == clock);
+  cpu.wram[0] = 0x12;
   auto parent = std::make_shared<ares::Core::Object>("storage tests");
   cpu.debugger.load(parent);
   dsp.debugger.load(parent);

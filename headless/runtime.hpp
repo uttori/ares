@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cli.hpp"
+
 #include <ares/ares.hpp>
 #include <mia/mia.hpp>
 #include <nall/string.hpp>
@@ -25,6 +27,8 @@ struct Runtime : ares::Platform {
   bool awaitGdbClient = false;
   u32 verbosity = 1;
   u64 runFramesCounter = 0;
+  std::vector<InputPress> inputPresses;
+  std::vector<RamCheat> ramCheats;
   bool videoChecksum = false;
   double benchmarkDuration = 0.0;
   u64 benchmarkFrameTarget = 0;
@@ -49,6 +53,7 @@ struct Runtime : ares::Platform {
   auto video(ares::Node::Video::Screen node, const u32* data, u32 pitch, u32 width, u32 height) -> void override;
   auto audio(ares::Node::Audio::Stream node) -> void override;
   auto input(ares::Node::Input::Input node) -> void override;
+  auto cheat(u32 address) -> maybe<u32> override;
   auto flushPendingAudio() -> void;
   auto finalizeAudioCapture() -> void;
 

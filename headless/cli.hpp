@@ -2,8 +2,19 @@
 
 #include "settings.hpp"
 #include <nall/arguments.hpp>
+#include <vector>
 
 namespace headless {
+
+// Press one named port-1 button during [begin, end), measured in primary video presentations from launch.
+struct InputPress {
+  u64 begin = 0;
+  u64 end = 0;
+  nall::string button;
+};
+
+// A PAR read override; physical RAM and ordinary CPU writes remain independently observable.
+struct RamCheat { u32 address = 0; u8 value = 0; };
 
 struct CliOptions {
   nall::string systemOverride;
@@ -23,6 +34,8 @@ struct CliOptions {
   bool listSystemAliases = false;
   bool showVersion = false;
   LaunchSettings launchSettings;
+  std::vector<InputPress> inputPresses;
+  std::vector<RamCheat> ramCheats;
 };
 
 auto parseCliOptions(nall::Arguments& arguments, CliOptions& options, nall::string& error) -> bool;
