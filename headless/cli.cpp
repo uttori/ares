@@ -111,6 +111,32 @@ auto parseCliOptions(Arguments& arguments, CliOptions& options, string& error) -
     }
   }
 
+  string press;
+  while(arguments.take("--press", press)) {
+    auto fields = nall::split(press, ":");
+    u64 begin = 0, end = 0;
+    // Begin zero is valid even though the common positive-integer parser rejects it.
+    if(fields.size() != 3 || (fields[0] != "0" && !parsePositiveInteger(fields[0], begin))
+        || !parsePositiveInteger(fields[1], end) || end <= begin || !fields[2]
+        || !options.runFramesTarget || end > options.runFramesTarget) {
+      error = "--press expects begin:end:Button within --run-frames (half-open frame range).";
+      return false;
+    }
+    options.inputPresses.push_back({begin, end, fields[2]});
+  }
+  string par;
+  while(arguments.take("--par", par)) {
+    bool valid = par.size() == 8;
+    for(char c : par) if(!std::isxdigit(static_cast<unsigned char>(c))) valid = false;
+    u32 encoded = valid ? par.hex() : 0;
+    u32 address = encoded >> 8;
+    if(!valid || address < 0x7e0000 || address >= 0x800000) {
+      error = "--par requires eight hex digits selecting SNES WRAM (address then value).";
+      return false;
+    }
+    options.ramCheats.push_back({address, u8(encoded)});
+  }
+
   if(arguments.take("--quiet")) options.verbosity = 0;
   if(arguments.take("--verbose")) options.verbosity = 2;
 
@@ -187,6 +213,8 @@ auto printHeadlessUsage() -> void {
   print("\nExecution:\n");
   print("  --benchmark value     Run benchmark for N seconds (eg 5s / 5) or N frames (eg 300f)\n");
   print("  --run-frames frames   Run for exactly N frames and then exit\n");
+  print("  --press begin:end:Button  Hold a named button on controller port 1 during [begin,end) frames; repeatable\n");
+  print("  --par AAAAAAVV        Override SNES WRAM reads at address AAAAAA with byte VV; repeatable\n");
 
   print("\nLogging:\n");
   print("  --quiet               Suppress non-essential runtime logging\n");

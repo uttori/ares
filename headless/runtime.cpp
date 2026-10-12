@@ -164,13 +164,29 @@ auto Runtime::audio(ares::Node::Audio::Stream node) -> void {
 }
 
 auto Runtime::input(ares::Node::Input::Input node) -> void {
-  if(auto button = node->cast<ares::Node::Input::Button>()) button->setValue(0);
+  if(auto button = node->cast<ares::Node::Input::Button>()) {
+    bool firstController = false;
+    for(auto parent = node->parent().lock(); parent; parent = parent->parent().lock()) {
+      if(parent->name() == "Controller Port 1") firstController = true;
+    }
+    bool pressed = false;
+    for(auto& input : inputPresses) {
+      if(firstController && input.button == node->name() && runFramesCounter >= input.begin && runFramesCounter < input.end) pressed = true;
+    }
+    button->setValue(pressed);
+  }
   if(auto axis = node->cast<ares::Node::Input::Axis>()) axis->setValue(0);
   if(auto trigger = node->cast<ares::Node::Input::Trigger>()) trigger->setValue(0);
 }
 
 auto Runtime::flushPendingAudio() -> void {
   mixPendingAudioFrames();
+}
+
+// Keep read overrides separate from storage mutation so WRAM snapshots retain their physical meaning.
+auto Runtime::cheat(u32 address) -> maybe<u32> {
+  for(auto& code : ramCheats) if(code.address == address) return code.value;
+  return nothing;
 }
 
 auto Runtime::mixPendingAudioFrames() -> void {

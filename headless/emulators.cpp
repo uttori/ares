@@ -112,6 +112,8 @@ const std::vector<std::pair<string, std::vector<string>>> systemAliases = {
 
 auto tryConnectPort(ares::Node::System& root, const string& name, maybe<string> device = {}) -> void {
   if(auto port = root->find<ares::Node::Port>(name)) {
+    // A successful named allocation must survive the generic fallback, which otherwise disconnects it.
+    if(port->connected()) return;
     if(device) port->allocate(*device);
     else port->allocate();
     port->connect();
