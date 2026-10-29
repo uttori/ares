@@ -123,7 +123,7 @@ inline auto CPU::Channel::transfer(n24 addressA, n2 index, bool hdma) -> void {
 }
 
 auto CPU::Channel::captureTransfer(u8 boundary, bool hdma, u32 transferred, std::array<uint64_t, 3> token) -> std::array<uint64_t, 3> {
-  auto& capture = nall::GDB::server.capture;
+  auto& capture = nall::GDB::server.capture.busTarget();
   if(!capture.transferActive()) return {};
   // Reserve before reading the snapshot: a frontend handoff can stop or replace
   // the session. The marker and its configuration must describe the same instant.

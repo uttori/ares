@@ -97,11 +97,15 @@ auto MOS6502::algorithmBVS() -> void {
 }
 
 auto MOS6502::algorithmBranch(bool take) -> void {
+  // Branches use instructionNone, so observe their real displacement read here.
+  // Keep the not-taken last-cycle marker and taken IRQ sampling before the read.
   if(!take) {
-  L MDR = read(MAR); // dummy relative read
+  L MDR = read(MAR);
+    fetched(MAR, MDR);
   } else {
     bool irq = irqPending();
     MDR = read(MAR);
+    fetched(MAR, MDR);
     n16 newPC = PC + (i8)MDR;
     bool pageCrossed = newPC >> 8 != PC >> 8;
 

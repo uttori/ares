@@ -36,7 +36,7 @@ auto CPU::readIO(n16 address) -> n8 {
     if(system.model() == System::Model::VsUniSystem) return vsUniSystem.io.read(address, data);
     auto port1 = controllerPort1.data();
     auto port3 = expansionPort.read1();
-    if(system.controls.microphone) platform->input(system.controls.microphone);
+    if(system.controls.microphone) captureControllerPoll(system.controls.microphone, 16);
     data.bit(0) = port1.bit(0);
     data.bit(1) = port3.bit(0);
     data.bit(2) = system.controls.microphone && system.controls.microphone->value() ? random().bit(0) : 0;

@@ -161,7 +161,7 @@ auto Program::main() -> void {
   //Window operations must be performed from the main thread.
 
   if(_needsResize) {
-    if(settings.video.adaptiveSizing && !startPseudoFullScreen) presentation.resizeWindow();
+    if(settings.video.adaptiveSizing && !startPseudoFullScreen) presentation.resizeWindow(true);
     _needsResize = false;
   }
 

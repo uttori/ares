@@ -10,6 +10,10 @@
 #include <thread>
 #include <fcntl.h>
 #include <cerrno>
+// The statically linked API permits a fixed, caller-owned compression workspace.
+#define ZSTD_STATIC_LINKING_ONLY
+#include <zstd.h>
+#include <zstd_errors.h>
 #if defined(_WIN32)
 #include <io.h>
 #include <sys/stat.h>
@@ -36,6 +40,10 @@ private:
   struct Writer {
     std::string path, partial, header, session, terminal;
     std::vector<uint8_t> bytes;
+    std::vector<uint64_t> compressionWorkspace;
+    std::array<uint8_t, Capture::chunkBytes> compressed{};
+    ZSTD_CCtx* compressor{};
+    bool compression{};
     uint64_t sequence{}, event{}, writtenBytes{}, batches{};
     // Worker counters are read only after acquiring Idle/Complete, just like bytes.
     bool profile{};
@@ -47,9 +55,19 @@ private:
     bool job{}, quit{}, finish{}, cancel{};
     std::thread thread;
 
-    Writer(std::string path, std::string header, std::string session, bool profile)
-    : path(std::move(path)), partial(this->path + ".partial"), header(std::move(header)), session(std::move(session)), profile(profile) {
+    Writer(std::string path, std::string header, std::string session, bool profile, bool compression)
+    : path(std::move(path)), partial(this->path + ".partial"), header(std::move(header)), session(std::move(session)), compression(compression), profile(profile) {
       bytes.reserve(batchBytes);
+      if(compression) {
+        auto parameters = ZSTD_getCParams(3, Capture::chunkBytes - 64, 0);
+        auto workspaceBytes = ZSTD_estimateCCtxSize_usingCParams(parameters);
+        // Leave room for metadata and producer scratch within the negotiated overhead.
+        // Static contexts cannot grow, launch threads, or allocate an unbounded window.
+        if(ZSTD_isError(workspaceBytes) || workspaceBytes + batchBytes + compressed.size() + 65536 > Capture::overheadBytes) throw 0;
+        compressionWorkspace.resize((workspaceBytes + 7) / 8);
+        compressor = ZSTD_initStaticCCtx(compressionWorkspace.data(), compressionWorkspace.size() * 8);
+        if(!compressor) throw 0;
+      }
       thread = std::thread([this] { run(); });
     }
     ~Writer() {
@@ -98,8 +116,49 @@ private:
       auto frame = FileCapture::frame(magic, json);
       return writeAll(fd, frame.data(), frame.size());
     }
+    // Compact only the worker-owned batch. Raw producer chunks remain retained until
+    // fsync succeeds; each independently encoded frame keeps its original event IDs.
+    auto compressBatch() -> bool {
+      size_t read = 0, write = 0;
+      auto get32 = [](const uint8_t* p) -> uint32_t {
+        return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+      };
+      auto put32 = [](uint8_t* p, uint32_t value) { for(unsigned i = 0; i < 4; ++i) p[i] = value >> (8 * i); };
+      while(read < bytes.size()) {
+        auto* source = bytes.data() + read;
+        if(bytes.size() - read < 12) return false;
+        bool chunk = !std::memcmp(source, "ACT2", 4);
+        if(chunk && bytes.size() - read < 64) return false;
+        size_t length = chunk ? 64 + get32(source + 48) : 12 + get32(source + 4);
+        if(length > bytes.size() - read || (chunk && (length <= 64 || length > Capture::chunkBytes))) return false;
+        size_t stored = length;
+        if(chunk) {
+          // A complete one-shot frame carries its own content size and dictionary-free
+          // history. Destination exhaustion falls back to the original raw payload.
+          auto size = ZSTD_compressCCtx(compressor, compressed.data() + 64, compressed.size() - 64, source + 64, length - 64, 3);
+          if(ZSTD_isError(size)) {
+            // Only destination exhaustion is a valid raw fallback; other errors fail closed.
+            if(ZSTD_getErrorCode(size) != ZSTD_error_dstSize_tooSmall) return false;
+          } else if(size < length - 64) {
+            std::memcpy(compressed.data(), source, 64);
+            compressed[6] = 1;
+            put32(compressed.data() + 48, size);
+            put32(compressed.data() + 56, 0);
+            stored = 64 + size;
+            put32(compressed.data() + 56, Capture::crc32c(compressed.data(), stored));
+            std::memcpy(bytes.data() + write, compressed.data(), stored);
+          }
+        }
+        // Compaction may overlap its source. It never reaches unread batch bytes.
+        if(stored == length) std::memmove(bytes.data() + write, source, length);
+        read += length; write += stored;
+      }
+      bytes.resize(write);
+      return true;
+    }
     auto writeBatch(int fd) -> bool {
       auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+      if(compression && !compressBatch()) return false;
       if(!writeAll(fd, bytes.data(), bytes.size())) return false;
       auto written = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
       if(!sync(fd)) return false;
@@ -209,25 +268,37 @@ public:
       if(cap.empty() || cap[0] != '{') return "E01";
       cap.pop_back(); return cap + ",\"nativeFile\":true}";
     }
-    if(fields[0] == "start" && (fields.size() == 7 || (fields.size() == 8 && fields[7] == "profile"))) {
+    const size_t startFields = capture.famicom ? 8 : 7;
+    // Defaults cover existing clients. The explicit raw option supports comparisons
+    // and legacy export without changing the producer's lossless scope.
+    bool profile = fields.size() > startFields && fields.back() == "profile";
+    size_t optionsEnd = fields.size() - size_t(profile);
+    bool compression = true;
+    if(optionsEnd == startFields + 1 && fields[startFields] == "none") compression = false;
+    bool validOptions = optionsEnd == startFields ||
+      (optionsEnd == startFields + 1 && (fields[startFields] == "none" || fields[startFields] == "zstd"));
+    if(fields[0] == "start" && validOptions) {
       if(!halted || owns()) return "E09";
       std::string path, id, revision;
       if(!unhex(fields[3], path, 4096) || !unhex(fields[5], id, 256) || !unhex(fields[6], revision, 1024)
         || fields[4].size() != 64 || fields[4].find_first_not_of("0123456789abcdef") != std::string::npos
         || !std::filesystem::u8path(path).is_absolute() || capability(fields[2]).empty()) return "E02";
+      // Famicom payload identity alone cannot distinguish a different iNES mapper header.
+      if(capture.famicom && (fields[7].size() != 64 || fields[7].find_first_not_of("0123456789abcdef") != std::string::npos)) return "E02";
       writer.reset(); committedBytes = committedBatches = copyNs = committedWriteNs = committedSyncNs = 0;
       auto start = "start:" + fields[1];
       if(fields[2] != "instructions") start += ":" + fields[2];
       auto result = capture.command(start);
       if(result.empty() || result[0] != '{') return result;
-      capture.profileSeals = fields.size() == 8; capture.sealNanoseconds = 0;
+      capture.profileSeals = profile; capture.sealNanoseconds = 0;
       auto clock = capture.clockRatio();
       auto header = "{\"format\":\"uttori-ares-capture\",\"version\":2,\"session\":" + quote(capture.sessionId()) +
-        ",\"scope\":" + quote(capture.scopeName()) + ",\"ownership\":\"durable-prefix\",\"compression\":\"none\",\"checksum\":\"crc32c\",\"maxChunkBytes\":262144,\"allocatedBytes\":" + std::to_string(capture.allocatedBytes()) +
-        ",\"clock\":{\"id\":\"snes.master\",\"numerator\":" + quote(std::to_string(clock.first)) + ",\"denominator\":" + quote(std::to_string(clock.second)) +
-        "},\"architecture\":\"snes.65816\",\"addressSpace\":\"snes.cpu\",\"romContentSha256\":" + quote(fields[4]) +
+        ",\"scope\":" + quote(capture.scopeName()) + ",\"ownership\":\"durable-prefix\",\"compression\":" + quote(compression ? "zstd" : "none") + ",\"checksum\":\"crc32c\",\"maxChunkBytes\":262144,\"allocatedBytes\":" + std::to_string(capture.allocatedBytes()) +
+        ",\"clock\":{\"id\":" + quote(capture.clockName()) + ",\"numerator\":" + quote(std::to_string(clock.first)) + ",\"denominator\":" + quote(std::to_string(clock.second)) +
+        "},\"architecture\":" + quote(capture.architectureName()) + ",\"addressSpace\":" + quote(capture.addressSpaceName()) + ",\"romContentSha256\":" + quote(fields[4]) +
+        (capture.famicom ? ",\"romFileSha256\":" + quote(fields[7]) : "") +
         ",\"producer\":{\"id\":" + quote(id) + ",\"revision\":" + quote(revision) + "}}";
-      try { writer = std::make_unique<Writer>(path, header, capture.sessionId(), capture.profileSeals); }
+      try { writer = std::make_unique<Writer>(path, header, capture.sessionId(), capture.profileSeals, compression); }
       catch(...) { capture.fail("native-file-start"); return "E04"; }
       return status(capture);
     }
@@ -293,7 +364,7 @@ private:
     size_t start = 0;
     for(size_t i = 0; i <= value.size(); ++i) if(i == value.size() || value[i] == ':') {
       fields.push_back(value.substr(start, i - start)); start = i + 1;
-      if(fields.size() > 8) return {};
+      if(fields.size() > 10) return {};
     }
     return fields;
   }

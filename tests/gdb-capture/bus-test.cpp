@@ -105,6 +105,7 @@ struct Reader {
 auto snapshot(Node::System root) -> std::vector<u8> {
   serializer state;
   std::thread([&] { state = root->serialize(); }).join();
+  if(!state) return {};
   return {state.data(), state.data() + state.size()};
 }
 
@@ -161,6 +162,9 @@ auto run(Node::System root, const std::function<void()>& setup, const std::funct
   for(unsigned limit = 0; !done; ++limit) {
     assert(limit < 1000000 && "bus producer failed to yield or drain");
     root->run();
+    // A throttled native producer depends on the file worker, not emulated cycles.
+    // Yield host time so this bounded loop does not exhaust its guard before the worker runs.
+    if(nativeFile && server.capture.throttled) std::this_thread::sleep_for(std::chrono::microseconds(100));
     if(reader && server.capture.throttled && !held) {
       held = true;
       auto clock = cpu.captureClock, produced = server.capture.produced;
@@ -340,14 +344,16 @@ auto nall::main(Arguments args) -> void {
     assert(server.capture.state == (abort ? "incomplete" : "complete"));
   }
 
-  // Synchronizing a save from a bus hold must finish at a normal core boundary,
-  // invalidate the interrupted capture, and retain its exact readable prefix.
+  // A streamed consumer cannot drain under the save guard. Declining that save
+  // must preserve every event so the consumer can finish the original recording.
   Reader saved;
   run(root, maximum, work, &saved, [&] {
-    assert(!snapshot(root).empty());
-    assert(server.capture.state == "incomplete" && server.capture.error == "state-save");
+    auto clock = cpu.captureClock;
+    assert(snapshot(root).empty());
+    assert(server.capture.active() && !server.capture.incomplete());
+    assert(cpu.captureClock == clock);
   });
-  assert(saved.nextEvent - 1 == 4095);
+  assert(saved.nextEvent - 1 == 1048576 && server.capture.complete());
   // Invoke the real DMA edge with a pending HDMA burst on the same channel.
   // Its nested HDMA boundary must not overwrite the outer DMA run's identity.
   Reader preempted; preempted.transfers = true;

@@ -193,7 +193,8 @@ auto nall::main(Arguments arguments) -> void {
 
     if(runtime.awaitGdbClient) {
       fprintf(stderr, "Waiting for GDB client on port %u...\n", runtime.gdbPort);
-      while(!runtime.shouldExit && (!nall::GDB::server.hasClient() || (!nall::GDB::server.isHalted() && !nall::GDB::server.isInstructionBoundaryStopPending()))) {
+      // A pending stop must enter the core before its handshake can be acknowledged.
+      while(!runtime.shouldExit && (!nall::GDB::server.hasClient() || (!nall::GDB::server.isHalted() && !nall::GDB::server.isStopPending()))) {
         nall::GDB::server.updateLoop();
         usleep(20 * 1000);
       }

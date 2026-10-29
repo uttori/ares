@@ -30,6 +30,7 @@ auto drain() -> void {
 auto snapshot(Node::System root) -> std::vector<u8> {
   serializer state;
   std::thread([&] { state = root->serialize(); }).join();
+  if(!state) return {};
   return {state.data(), state.data() + state.size()};
 }
 auto nall::main(Arguments args) -> void {
@@ -170,8 +171,8 @@ auto nall::main(Arguments args) -> void {
   assert(server.capture.state == "complete");
 
   // A real CPU instruction can stall inside maximum DMA. Its bus prefix must
-  // drain before the instruction completes; saving there must not deadlock the
-  // guarded UI handoff or clear the independent debugger stop.
+  // drain before the instruction completes. A guarded save cannot drive a remote
+  // consumer, so it must decline the save without changing the recording or CPU.
   boot(); rom[0] = 0xe8;
   for(auto& channel : cpu.channels) {
     channel.dmaEnable = true; channel.hdmaEnable = false;
@@ -185,11 +186,16 @@ auto nall::main(Arguments args) -> void {
   assert(server.capture.pendingInstruction());
   assert(!server.capture.command("read:" + server.capture.sessionId() + ":1").empty());
   auto busPrefix = server.capture.produced;
-  assert(!snapshot(root).empty());
-  assert(server.capture.state == "incomplete" && server.capture.error == "state-save");
-  assert(server.capture.produced == busPrefix);
-  stopAtBoundary(root); drain();
-  server.capture.command("release:" + server.capture.sessionId());
+  auto busClock = cpu.captureClock;
+  assert(snapshot(root).empty());
+  assert(server.capture.active() && !server.capture.incomplete());
+  assert(server.capture.produced == busPrefix && cpu.captureClock == busClock);
+  for(unsigned i = 0; !server.isHalted(); ++i) {
+    assert(i < 1024);
+    drain(); root->run();
+  }
+  server.capture.command("stop:" + server.capture.sessionId()); drain();
+  assert(server.capture.complete() && server.capture.produced > busPrefix);
   auto savedClock = cpu.captureClock;
   for(unsigned i = 0; i < 3; ++i) { root->run(); assert(server.isHalted() && cpu.captureClock == savedClock); }
   command("s"); stopAtBoundary(root);

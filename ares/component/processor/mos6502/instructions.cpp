@@ -6,6 +6,7 @@ auto MOS6502::instructionNone(addr mode, algorithm alg) -> void {
 auto MOS6502::instructionLoad(addr mode, algorithm alg) -> void {
   MAR = ADDR();
 L MDR = read(MAR);
+  if(mode == &MOS6502::addressImmediate || mode == &MOS6502::addressRelative) fetched(MAR, MDR);
   ALG();
 }
 

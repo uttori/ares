@@ -10,7 +10,10 @@ auto PPU::loadCHR(n16 address) -> n8 {
   if (enable()) {
     io.busAddress = (n14)address;
     cartridge.ppuAddressBus(address);
-    return cartridge.readCHR(address);
+    bool recording = captureNesReady();
+    auto value = cartridge.readCHR(address);
+    if(recording) captureNesTimeline(0, address, value, cartridge.board->debugIRQ());
+    return value;
   } else {
     return 0x00;
   }

@@ -32,6 +32,7 @@ auto System::unserialize(serializer& s) -> bool {
   if(signature != SerializerSignature) return false;
   if(string{version} != SerializerVersion) return false;
 
+  nall::GDB::server.capture.fail("state-load");
   if(synchronize) power(/* reset = */ false);
   serialize(s, synchronize);
   return true;

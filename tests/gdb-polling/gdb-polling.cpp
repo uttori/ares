@@ -9,6 +9,14 @@ namespace nall::GDB {
 unsigned sleeps = 0;
 auto usleep(unsigned) -> void { ++sleeps; }
 struct Server {
+  // The transport double observes scheduling only; file ownership and I/O have
+  // separate native tests. The real updateLoop must service capture without a socket.
+  struct Capture {} capture;
+  struct FileCapture {
+    unsigned services = 0;
+    auto service(Capture&) -> void { ++services; }
+  } captureFile;
+  struct { std::function<void()> captureContextService; } hooks;
   bool started = true, halted = false, requestDisconnect = false, noAckMode = false;
   bool disconnected = false;
   u32 messageCount = 0, polls = 0, delivered = 0, acknowledgements = 0;
@@ -23,6 +31,7 @@ struct Server {
     if(++polls > 100000) throw std::runtime_error("polling exceeded bounded test limit");
     if(next) next(*this);
   }
+  auto serviceCapture() -> void;
   auto updateLoop() -> void;
 };
 #include "polling-loop.inc"
@@ -41,9 +50,19 @@ auto nall::main(Arguments) -> void {
       std::cerr << "FAIL " << name << ": " << error.what() << '\n';
     }
   };
+  test("save service cannot dispatch debugger commands", [] {
+    Server s; s.requestDisconnect = true;
+    unsigned contextServices = 0;
+    s.hooks.captureContextService = [&] { ++contextServices; };
+    s.serviceCapture();
+    require(s.captureFile.services == 1 && contextServices == 1, "save service missed a recording sink");
+    require(s.polls == 0 && !s.disconnected && s.requestDisconnect, "save service dispatched transport work");
+    require(nall::GDB::sleeps == 0, "save service slept");
+  });
   test("inactive server does not poll", [] {
     Server s; s.started = false; s.updateLoop();
     require(s.polls == 0, "inactive server polled");
+    require(s.captureFile.services == 1, "file capture requires an active debugger socket");
     require(nall::GDB::sleeps == 0, "inactive server slept");
   });
   for(bool halted : {false, true}) {

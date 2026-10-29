@@ -74,10 +74,26 @@ auto verify(const fs::path& path, uint64_t expected, bool complete) -> void {
     if(chunk) {
       assert(!pending && !terminal && ++sequence == le(bytes, offset + 24, 8));
       assert(events + 1 == le(bytes, offset + 32, 8));
+      auto codec = le(bytes, offset + 6, 2);
+      assert(codec <= 1);
+      std::vector<uint8_t> payload;
+      if(codec) {
+        auto decoded = le(bytes, offset + 52, 4);
+        assert(decoded > 0 && decoded <= Capture::chunkBytes - 64);
+        payload.resize(decoded);
+        assert(ZSTD_getFrameContentSize(bytes.data() + offset + 64, length - 64) == decoded);
+        auto result = ZSTD_decompress(payload.data(), payload.size(), bytes.data() + offset + 64, length - 64);
+        assert(!ZSTD_isError(result) && result == decoded);
+      } else {
+        assert(le(bytes, offset + 52, 4) == length - 64);
+        payload.assign(bytes.begin() + offset + 64, bytes.begin() + offset + length);
+      }
       unsigned count = 0;
-      for(size_t i = 64; i < length;) {
-        assert(++events == le(bytes, offset + i + 8, 8)); ++count;
-        i += le(bytes, offset + i + 4, 4);
+      for(size_t i = 0; i < payload.size();) {
+        assert(++events == le(payload, i + 8, 8)); ++count;
+        auto recordBytes = le(payload, i + 4, 4);
+        assert(recordBytes >= 32 && i + recordBytes <= payload.size());
+        i += recordBytes;
       }
       assert(count == le(bytes, offset + 40, 4)); pending = true;
     } else if(magic == "ACK2") { assert(pending); pending = false; }

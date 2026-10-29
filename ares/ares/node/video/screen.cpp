@@ -57,6 +57,7 @@ auto Screen::power() -> void {
   memory::fill<const u32*>(_lineOverride.data(), _canvasWidth * _canvasHeight, nullptr);
   _phosphorHistoryValid = false;
   _deinterlaceHistoryValid = false;
+  _captureWidth = _captureHeight = 0; _captureOutput = nullptr; _captureMarker = {};
 }
 
 auto Screen::pixels(bool frame) -> std::span<u32> {
@@ -228,11 +229,29 @@ auto Screen::colors(u32 colors, std::function<n64 (n32)> color) -> void {
   _phosphorHistoryValid = false;
 }
 
+auto Screen::setCaptureMarker(std::function<std::array<u64, 2>()> source) -> void {
+  lock_guard<recursive_mutex> lock(_mutex);
+  _captureMarkerSource = std::move(source);
+  _captureMarker = _pendingCaptureMarker = {};
+}
+
+auto Screen::capturePixels(u32& width, u32& height, std::array<u64, 2>& marker) -> std::vector<u32> {
+  lock_guard<recursive_mutex> lock(_mutex);
+  width = _captureWidth; height = _captureHeight;
+  marker = _captureMarker;
+  std::vector<u32> pixels(width * height);
+  for(u32 y = 0; y < height; ++y)
+    memory::copy(pixels.data() + y * width, _captureOutput + y * _capturePitch, width * sizeof(u32));
+  return pixels;
+}
+
 auto Screen::frame() -> void {
   if(runAhead()) return;
   while(_frame) spinloop();
 
   lock_guard<recursive_mutex> lock(_mutex);
+  _pendingCaptureMarker = {};
+  if(_captureMarkerSource) _pendingCaptureMarker = _captureMarkerSource();
   _inputA.swap(_inputB);
   if constexpr(!ares::Video::Threaded) {
     refresh();
@@ -439,6 +458,9 @@ auto Screen::refresh() -> void {
     swap(viewWidth, viewHeight);
   }
 
+  _captureWidth = viewWidth; _captureHeight = viewHeight;
+  _captureOutput = output + viewX + viewY * width;
+  _capturePitch = width; _captureMarker = _pendingCaptureMarker;
   platform->video(std::static_pointer_cast<Core::Video::Screen>(shared_from_this()), output + viewX + viewY * width, width * sizeof(u32), viewWidth, viewHeight);
   memory::fill<u32>(_inputB.get(), width * height, _fillColor);
 }

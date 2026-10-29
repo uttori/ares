@@ -1,4 +1,5 @@
 Gamepad::Gamepad(Node::Port parent) {
+  capturePort = parent->name() == "Controller Port 2" ? 1 : 0;
   node = parent->append<Node::Peripheral>("Gamepad");
 
   up     = node->append<Node::Input::Button>("Up");
@@ -13,7 +14,7 @@ Gamepad::Gamepad(Node::Port parent) {
 
 auto Gamepad::data() -> n3 {
   if(latched == 1) {
-    platform->input(a);
+    captureControllerPoll(a, capturePort * 8 + 0);
     return a->value();
   }
 
@@ -38,14 +39,14 @@ auto Gamepad::latch(n1 data) -> void {
   counter = 0;
 
   if(latched == 0) {
-    platform->input(a);
-    platform->input(b);
-    platform->input(select);
-    platform->input(start);
-    platform->input(up);
-    platform->input(down);
-    platform->input(left);
-    platform->input(right);
+    captureControllerPoll(a, capturePort * 8 + 0);
+    captureControllerPoll(b, capturePort * 8 + 1);
+    captureControllerPoll(select, capturePort * 8 + 2);
+    captureControllerPoll(start, capturePort * 8 + 3);
+    captureControllerPoll(up, capturePort * 8 + 4);
+    captureControllerPoll(down, capturePort * 8 + 5);
+    captureControllerPoll(left, capturePort * 8 + 6);
+    captureControllerPoll(right, capturePort * 8 + 7);
 
     if(!(up->value() & down->value())) {
       yHold = 0, upLatch = up->value(), downLatch = down->value();

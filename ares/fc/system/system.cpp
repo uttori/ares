@@ -1,5 +1,8 @@
 #include <fc/fc.hpp>
 #include <algorithm>
+#include <fstream>
+#include <nall/encode/png.hpp>
+#include <nall/gdb/server.hpp>
 
 namespace ares::Famicom {
 
@@ -24,6 +27,8 @@ Scheduler scheduler;
 System system;
 #include "controls.cpp"
 #include "serialization.cpp"
+#include "gdb.cpp"
+#include "gdb-capture-context.cpp"
 
 auto System::game() -> string {
   if(fds.node) {
@@ -94,6 +99,10 @@ auto System::load(Node::System& root, string name) -> bool {
   node->setUnserialize([this](serializer& s){ return this->unserialize(s); });
   root = node;
 
+  installGdbHooks();
+  nall::GDB::server.hooks.captureContext = captureContextCommand;
+  nall::GDB::server.hooks.captureContextService = [] { captureContext.service(); };
+  nall::GDB::server.hooks.captureContextBoundary = [] { return captureContext.boundary(); };
   scheduler.reset();
   controls.load(node);
   cpu.load(node);
@@ -118,6 +127,8 @@ auto System::save() -> void {
 
 auto System::unload() -> void {
   if(!node) return;
+  nall::GDB::server.capture.fail("unload");
+  captureContext.abort();
   save();
   controls.unload();
   cpu.unload();
@@ -137,6 +148,12 @@ auto System::unload() -> void {
 }
 
 auto System::power(bool reset) -> void {
+  bool interruptedReplay = captureContext.replaying;
+  if(captureContext.recording || interruptedReplay) captureContext.abort();
+  // Overrides also exist outside recording; every hardware reset returns input
+  // ownership to the host even when there is no active companion to abort.
+  captureContext.debuggerButtons = {-1, -1};
+  if(interruptedReplay) captureContext.replayFailed = true;
   if(model() == Model::VsUniSystem) vsUniSystem.power(reset);
   for(auto& setting : node->find<Node::Setting::Setting>()) setting->setLatch();
   random.entropy(Random::Entropy::Low);
@@ -146,6 +163,9 @@ auto System::power(bool reset) -> void {
   cpu.power(reset);
   ppu.power(reset);
   scheduler.power(cpu);
+  // Integer master-clock identity, independent of wall-clock pacing.
+  if(region() == Region::PAL || region() == Region::Dendy) nall::GDB::server.capture.clockRate(266017125, 10);
+  else nall::GDB::server.capture.clockRate(236250000, 11);
 }
 
 }

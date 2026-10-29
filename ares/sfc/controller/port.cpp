@@ -45,3 +45,11 @@ auto ControllerPort::allocate(string name) -> Node::Peripheral {
 
 auto ControllerPort::serialize(serializer& s) -> void {
 }
+
+// Capture the actual two serial bits consumed by the CPU/auto-joypad reader.
+// Replaying at this boundary also covers repeated reads while the latch is high.
+auto ControllerPort::data() -> n2 {
+  n2 value = 0;
+  if(device) value = device->data();
+  return captureControllerInput(this == &controllerPort1 ? 0 : 1, value);
+}

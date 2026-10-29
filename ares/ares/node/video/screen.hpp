@@ -63,6 +63,12 @@ struct Screen : Video {
   auto detach(Node::Video::Sprite) -> void;
 
   auto colors(u32 colors, std::function<n64 (n32)> color) -> void;
+  // Replacing the source begins a new capture epoch; already presented images
+  // remain available but must not retain ordinals from the previous session.
+  auto setCaptureMarker(std::function<std::array<u64, 2>()> source) -> void;
+  // Snapshot the last presented viewport under the video lock. This never
+  // renders, advances the PPU, or races the optional video worker.
+  auto capturePixels(u32& width, u32& height, std::array<u64, 2>& marker) -> std::vector<u32>;
   auto frame() -> void;
   auto refresh() -> void;
   auto lookupPalette(u32 index) -> u32;
@@ -101,6 +107,10 @@ protected:
   std::unique_ptr<u32[]> _inputB;
   std::unique_ptr<u32[]> _output;
   std::unique_ptr<u32[]> _rotate;
+  const u32* _captureOutput = nullptr;
+  std::function<std::array<u64, 2>()> _captureMarkerSource;
+  u32 _captureWidth = 0, _captureHeight = 0, _capturePitch = 0;
+  std::array<u64, 2> _captureMarker{}, _pendingCaptureMarker{};
   std::unique_ptr<u32[]> _palette;
   std::unique_ptr<u32[]> _deinterlaceHistory;
   std::vector<n1> _lineOverrideActive;

@@ -23,7 +23,7 @@ inline auto PPU::readVRAM() -> n16 {
 }
 
 inline auto PPU::writeVRAM(n1 byte, n8 data) -> void {
-  auto& capture = nall::GDB::server.capture;
+  auto& capture = nall::GDB::server.capture.busTarget();
   if(!io.displayDisable && vcounter() < vdisp()) {
     if(capture.ppuActive()) capture.ppuBlocked();
     return;
@@ -42,7 +42,7 @@ inline auto PPU::readOAM(n10 address) -> n8 {
 }
 
 inline auto PPU::writeOAM(n10 address, n8 data) -> void {
-  auto& capture = nall::GDB::server.capture;
+  auto& capture = nall::GDB::server.capture.busTarget();
   if(!io.displayDisable && vcounter() < vdisp()) {
     // Resolve rendering's address substitution before applying high-table mirroring.
     if(address.bit(9) == 0) address = 0x000 | latch.oamAddress << 2 | address & 1;
@@ -62,7 +62,7 @@ inline auto PPU::readCGRAM(n1 byte, n8 address) -> n8 {
 }
 
 inline auto PPU::writeCGRAM(n8 address, n15 data) -> void {
-  auto& capture = nall::GDB::server.capture;
+  auto& capture = nall::GDB::server.capture.busTarget();
   if(!io.displayDisable
   && vcounter() > 0 && vcounter() < vdisp()
   && hcounter() >= 88 && hcounter() < 1096
@@ -240,8 +240,8 @@ auto PPU::writeIO(n24 address, n8 data) -> void {
   //OAMDATA
   case 0x2104: {
     // Snapshot the PPU decision point; latch-only writes remain explicit zero-byte effects.
-    if(nall::GDB::server.capture.ppuActive())
-      nall::GDB::server.capture.ppuBegin(3, uint8_t(io.displayDisable) | 4, hcounter(), vcounter());
+    if(nall::GDB::server.capture.busTarget().ppuActive())
+      nall::GDB::server.capture.busTarget().ppuBegin(3, uint8_t(io.displayDisable) | 4, hcounter(), vcounter());
     n1 latchBit = io.oamAddress.bit(0);
     n10 address = io.oamAddress++;
     if(latchBit == 0) latch.oam = data;
@@ -416,8 +416,8 @@ auto PPU::writeIO(n24 address, n8 data) -> void {
   //VMDATAL
   case 0x2118: {
     // Snapshot the PPU decision point; latch-only writes remain explicit zero-byte effects.
-    if(nall::GDB::server.capture.ppuActive())
-      nall::GDB::server.capture.ppuBegin(1, uint8_t(io.displayDisable) | 4 | (vram.mask == 0xffff ? 8 : 0), hcounter(), vcounter());
+    if(nall::GDB::server.capture.busTarget().ppuActive())
+      nall::GDB::server.capture.busTarget().ppuBegin(1, uint8_t(io.displayDisable) | 4 | (vram.mask == 0xffff ? 8 : 0), hcounter(), vcounter());
     writeVRAM(0, data);
     if(io.vramIncrementMode == 0) io.vramAddress += io.vramIncrementSize;
     return;
@@ -426,8 +426,8 @@ auto PPU::writeIO(n24 address, n8 data) -> void {
   //VMDATAH
   case 0x2119: {
     // Snapshot the PPU decision point; latch-only writes remain explicit zero-byte effects.
-    if(nall::GDB::server.capture.ppuActive())
-      nall::GDB::server.capture.ppuBegin(1, uint8_t(io.displayDisable) | 4 | (vram.mask == 0xffff ? 8 : 0), hcounter(), vcounter());
+    if(nall::GDB::server.capture.busTarget().ppuActive())
+      nall::GDB::server.capture.busTarget().ppuBegin(1, uint8_t(io.displayDisable) | 4 | (vram.mask == 0xffff ? 8 : 0), hcounter(), vcounter());
     writeVRAM(1, data);
     if(io.vramIncrementMode == 1) io.vramAddress += io.vramIncrementSize;
     return;
@@ -493,8 +493,8 @@ auto PPU::writeIO(n24 address, n8 data) -> void {
   //CGDATA
   case 0x2122: {
     // Snapshot the PPU decision point; latch-only writes remain explicit zero-byte effects.
-    if(nall::GDB::server.capture.ppuActive())
-      nall::GDB::server.capture.ppuBegin(2, uint8_t(io.displayDisable) | 4, hcounter(), vcounter());
+    if(nall::GDB::server.capture.busTarget().ppuActive())
+      nall::GDB::server.capture.busTarget().ppuBegin(2, uint8_t(io.displayDisable) | 4, hcounter(), vcounter());
     if(io.cgramAddressLatch++ == 0) {
       latch.cgram = data;
     } else {

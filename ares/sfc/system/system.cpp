@@ -1,6 +1,8 @@
 #include <sfc/sfc.hpp>
 #include <nall/gdb/server.hpp>
 #include <algorithm>
+#include <fstream>
+#include <nall/encode/png.hpp>
 
 namespace ares::SuperFamicom {
 
@@ -28,6 +30,7 @@ Scheduler scheduler;
 System system;
 #include "controls.cpp"
 #include "serialization.cpp"
+#include "gdb-capture-context.cpp"
 #include "gdb.cpp"
 #include "gdb-memory.cpp"
 
@@ -101,6 +104,9 @@ auto System::load(Node::System& root, string name) -> bool {
   controls.load(node);
   cpu.load(node);
   installGdbHooks();
+  nall::GDB::server.hooks.captureContext = captureContextCommand;
+  nall::GDB::server.hooks.captureContextService = [] { captureContext.service(); };
+  nall::GDB::server.hooks.captureContextBoundary = [] { return captureContext.boundary(); };
   installGdbMemoryHooks();
   smp.load(node);
   dsp.load(node);

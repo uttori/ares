@@ -3,12 +3,13 @@ auto Program::stateSave(u32 slot) -> bool {
   if(!emulator) return false;
 
   auto location = emulator->locate(emulator->game->location, {".bs", slot}, settings.paths.saves);
-  string undoLocation = {location.slice(0, (location.size() - 1)), "u"};
-  if(file::move(location, undoLocation)) {
-    state.undoSlot = slot;
-  }
-
   if(auto state = emulator->root->serialize()) {
+    // The core can decline a save while a streamed capture owns a suspended
+    // transfer. Keep the existing slot intact until a replacement is available.
+    string undoLocation = {location.slice(0, (location.size() - 1)), "u"};
+    if(file::move(location, undoLocation)) {
+      this->state.undoSlot = slot;
+    }
     if(file::write(location, {state.data(), state.size()})) {
       showMessage({"Saved state to slot ", slot});
       return true;
