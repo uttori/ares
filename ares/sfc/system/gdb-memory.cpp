@@ -20,5 +20,29 @@ auto installGdbMemoryHooks() -> void {
     }
     return result;
   };
+  // Named reads address physical storage directly, bypassing CPU bus handlers.
+  nall::GDB::server.hooks.namedMemoryRead = [](const string& addressSpace, u64 address, u32 byteCount) -> string {
+    if(address > 0xff'ffff) return "E00";
+    u64 memorySize = 0;
+    if(addressSpace == "snes.wram") memorySize = 128_KiB;
+    else if(addressSpace == "snes.cartridge-rom") memorySize = cartridge.rom.size();
+    else if(addressSpace == "snes.sram") memorySize = cartridge.ram.size();
+    else if(addressSpace == "snes.spc700.aram") memorySize = 64_KiB;
+    else return "E00";
+
+    if(address >= memorySize) return {};
+    u32 readable = min<u64>(byteCount, memorySize - address);
+    string result;
+    result.reserve(readable * 2);
+    for(u32 byte : range(readable)) {
+      n8 value;
+      if(addressSpace == "snes.wram") value = cpu.wram[address + byte];
+      else if(addressSpace == "snes.sram") value = cartridge.ram.read(address + byte);
+      else if(addressSpace == "snes.spc700.aram") value = dsp.apuram[address + byte];
+      else value = cartridge.rom.read(address + byte);
+      result.append(hex(value, 2, '0'));
+    }
+    return result;
+  };
 }
 }

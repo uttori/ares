@@ -10,6 +10,9 @@ struct MOS6502 {
   virtual auto read(n16 addr) -> n8 = 0;
   virtual auto write(n16 addr, n8 data) -> void = 0;
 
+  // Observes actual instruction-byte reads; the default hook has no bus side effects.
+  virtual auto fetched(n16 address, n8 data) -> void {}
+
   virtual auto lastCycle() -> void {}
   virtual auto cancelNmi() -> void {}
   virtual auto delayIrq() -> void {}

@@ -1,11 +1,11 @@
 static const string SerializerVersion = "v147";
 
 auto System::serialize(bool synchronize) -> serializer {
-  // Bus backpressure may suspend a transfer between accesses, where a normal
-  // synchronized state cannot restore its coroutine continuation. End evidence
-  // before synchronization so the core can reach its usual safe save boundary.
-  if(synchronize && nall::GDB::server.capture.busActive()) {
-    nall::GDB::server.capture.fail("state-save");
+  // A streamed bus capture needs socket acknowledgements to finish a suspended
+  // transfer. The guarded save cannot dispatch those commands safely; reject the
+  // save without changing the recording. Native writers drain in captureBusReady().
+  if(synchronize && nall::GDB::server.capture.busActive() && !nall::GDB::server.captureFile.owns()) {
+    return {};
   }
   if(synchronize) scheduler.enter(Scheduler::Mode::Synchronize);
   serializer s;

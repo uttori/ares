@@ -61,6 +61,11 @@ struct HVC_TxROM : Interface {  //MMC3
     Interface::save(characterRAM, "character.ram");
   }
 
+  auto debugIRQ() -> std::array<u8, 8> override {
+    return {u8(irqCounter), u8(irqLatch), u8(irqEnable), u8(irqLine),
+      u8(bool(characterAddress & 0x1000)), u8(irqDelay), u8(mcAccPulseCounter), u8(revision == Revision::MCACC)};
+  }
+
   auto main() -> void override {
     if(irqDelay) irqDelay--;
     cpu.irqLine(irqLine);
@@ -92,6 +97,52 @@ struct HVC_TxROM : Interface {  //MMC3
       address = outerBank.bit(2) << 17 | a16 << 16 | (n16)address;
     }
     return programROM.read(address);
+  }
+
+  auto debugPRGOffset(n16 address) -> maybe<u32> override {
+    if(address < 0x8000 || !programROM) return {};
+    n32 mapped = address;
+    n6 bank;
+    switch(address >> 13 & 3) {
+    case 0: bank = (programMode == 0 ? programBank[0] : (n6)0x3e); break;
+    case 1: bank = programBank[1]; break;
+    case 2: bank = (programMode == 1 ? programBank[0] : (n6)0x3e); break;
+    case 3: bank = 0x3f; break;
+    }
+
+    mapped = bank << 13 | (n13)address;
+    if(revision == Revision::NESQJ) {
+      mapped = outerBank.bit(0) << 17 | (n17)mapped;
+    }
+    if(revision == Revision::PALZZ) {
+      n1 a16 = (mapped.bit(16) & outerBank.bit(2)) | (outerBank.bit(1) & outerBank.bit(0));
+      mapped = outerBank.bit(2) << 17 | a16 << 16 | (n16)mapped;
+    }
+    return u32(mapped) & (programROM.size() - 1);
+  }
+
+  auto debugMapper() -> std::array<u8, 18> override {
+    std::array<u8, 18> state{};
+    // Outer-bank derivatives need an explicit identity before capture can claim MMC3 semantics.
+    if(revision == Revision::NESQJ || revision == Revision::PALZZ) { state[0] = 255; return state; }
+    state[0] = 4; state[2] = bankSelect; state[3] = programMode; state[4] = characterMode;
+    for(u32 i : range(6)) state[5 + i] = characterBank[i];
+    state[11] = programBank[0]; state[12] = programBank[1];
+    state[13] = ramEnable; state[14] = ramWritable; state[15] = mirror;
+    state[16] = irqLatch; state[17] = irqEnable;
+    return state;
+  }
+
+  auto debugRead(const string& space, u32 address) -> maybe<n8> override {
+    if(space == "nes.prg-rom" && address < programROM.size()) return programROM.read(address);
+    if(space == "nes.chr-rom" && address < characterROM.size()) return characterROM.read(address);
+    if(space == "nes.chr-ram" && address < characterRAM.size()) return characterRAM.read(address);
+    if(space == "nes.prg-ram" && address < programRAM.size()) return programRAM.read(address);
+    if(space == "nes.cpu") {
+      if(auto offset = debugPRGOffset(address)) return programROM.read(*offset);
+      if(address >= 0x6000 && address < 0x8000 && programRAM) { if(!ramEnable) return {}; return programRAM.read(address & 0x1fff); }
+    }
+    return {};
   }
 
   auto writePRG(n32 address, n8 data) -> void override {
@@ -183,6 +234,21 @@ struct HVC_TxROM : Interface {  //MMC3
     return address >> mirror & 0x0400 | (n10)address;
   }
 
+  auto debugPPUAddress(n14 address) -> maybe<DebugPPUAddress> override {
+    // These board variants need additional CHR/nametable semantics before claiming PPU evidence.
+    if(revision == Revision::TVROM || revision == Revision::NESQJ || revision == Revision::PALZZ) return {};
+    if(address & 0x2000) return DebugPPUAddress{3, u32(addressCIRAM(address)), true};
+    u32 mapped = addressCHR(address);
+    if(revision == Revision::TQROM) {
+      if(mapped < 0x10000 && characterROM) return DebugPPUAddress{1, mapped & (characterROM.size() - 1), false};
+      if(characterRAM) return DebugPPUAddress{2, mapped & (characterRAM.size() - 1), true};
+      return {};
+    }
+    if(characterRAM) return DebugPPUAddress{2, mapped & (characterRAM.size() - 1), true};
+    if(characterROM) return DebugPPUAddress{1, mapped & (characterROM.size() - 1), false};
+    return {};
+  }
+
   auto readCHR(n32 address, n8 data) -> n8 override {
     if(revision == Revision::TVROM) {
       if(address < 0x2000) return characterROM.read(addressCHR(address));
@@ -219,9 +285,13 @@ struct HVC_TxROM : Interface {  //MMC3
     if(revision == Revision::TQROM) {
       address = addressCHR(address);
       if(address < 0x10000) return;
+      cpu.capturePPUWrite(1, u32(address) & (characterRAM.size() - 1), data);
       return characterRAM.write(address, data);
     }
-    if(characterRAM) return characterRAM.write(addressCHR(address), data);
+    if(characterRAM) {
+      cpu.capturePPUWrite(1, u32(addressCHR(address)) & (characterRAM.size() - 1), data);
+      return characterRAM.write(addressCHR(address), data);
+    }
   }
 
   auto power() -> void override {

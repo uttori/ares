@@ -1,16 +1,20 @@
 auto CPU::captureBusReady() -> void {
-  auto& capture = nall::GDB::server.capture;
+  auto& capture = nall::GDB::server.capture.busTarget();
   // Keep disabled and instruction-only capture out of the per-access PPU path.
   if(!capture.busActive()) return;
   // The coroutine retains the exact transfer continuation. Do not acknowledge a
   // debugger stop or synchronize a save here: this may be mid-instruction/DMA.
-  // Stop/abort releases this reservation wait; failed capture holds at CPU::main.
-  while(capture.busActive() && !capture.ready()) scheduler.exit(Event::Step);
+  // A guarded save resumes here without running the frontend's polling loop.
+  // Drain both native sinks so synchronization can finish the transfer losslessly.
+  while(capture.busActive() && !capture.ready()) {
+    scheduler.exit(Event::Step);
+    nall::GDB::server.serviceCapture();
+  }
   capture.ppuReset();
 }
 
 auto CPU::captureBus(n24 address, n8 data, bool write, u8 phase, u8 channel) -> void {
-  auto& capture = nall::GDB::server.capture;
+  auto& capture = nall::GDB::server.capture.busTarget();
   if(!capture.busActive()) return;
   using Context = ares_capture::Capture::BusContext;
   auto context = Context::Unattributed;

@@ -79,6 +79,8 @@ class Server : public nall::TCPText::Server {
       std::function<string(u64 address, const std::vector<u8>& value)> checkedWrite{};
       std::function<u64(u64 address)> normalizeAddress{};
 
+      std::function<bool(u64 breakpoint, u64 pc)> breakpointMatches{};
+
       // Registers
       bool registersLittleEndian = false;
       std::function<string()> regReadGeneral{};
@@ -93,6 +95,11 @@ class Server : public nall::TCPText::Server {
       std::function<string()> targetXML{};
       bool instructionTrace{};
       bool instructionTraceDetails{};
+      // Context operations run only at acknowledged CPU stops; service also runs
+      // at backpressure exits so the independent graphics writer can drain.
+      std::function<string(const string&)> captureContext{};
+      std::function<void()> captureContextService{};
+      std::function<bool()> captureContextBoundary{};
 
 
     } hooks{};
@@ -130,6 +137,9 @@ class Server : public nall::TCPText::Server {
     
     auto getPcOverride() const { return pcOverride; };
 
+    // Service bounded native recording batches under the emulation-thread handoff.
+    // Unlike updateLoop(), this never dispatches socket commands or sleeps.
+    auto serviceCapture() -> void;
     auto updateLoop() -> void;
     auto getStatusText(u32 port, bool useIPv4) -> string;
 

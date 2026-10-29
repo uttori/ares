@@ -50,3 +50,6 @@ extern System system;
 
 auto Region::NTSC() -> bool { return system.region() == System::Region::NTSC; }
 auto Region::PAL() -> bool { return system.region() == System::Region::PAL; }
+
+// Private capture context entry points; all calls belong to the emulation thread.
+auto captureControllerInput(u8 port, u8 value) -> u8;

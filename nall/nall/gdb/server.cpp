@@ -84,11 +84,12 @@ namespace nall::GDB {
   }
 
   auto Server::reportPC(u64 pc, bool instruction, bool canExecute) -> bool {
+    if(hooks.captureContextBoundary && hooks.captureContextBoundary()) forceHalt = true;
     if(!hasActiveClient)return true;
 
     bool skipBreakpoint = skipBreakpointOnce && currentPC == pc;
     currentPC = pc;
-    bool needHalts = forceHalt || (instruction && !skipBreakpoint && std::ranges::find(breakpoints, pc) != breakpoints.end());
+    bool needHalts = forceHalt || (instruction && !skipBreakpoint && hasBreakpointAt(pc));
     // Repeated capacity waits revisit this same boundary before any instruction runs.
     if(instruction && canExecute) skipBreakpointOnce = false;
     stoppedAtInstructionBoundary = hooks.instructionBoundaryStop && needHalts;
@@ -119,6 +120,7 @@ namespace nall::GDB {
 
   auto Server::hasBreakpointAt(u64 pc) const -> bool {
     if(!hasActiveClient) return false;
+    if(hooks.breakpointMatches) return std::ranges::any_of(breakpoints, [&](u64 address) { return hooks.breakpointMatches(address, pc); });
     return std::ranges::find(breakpoints, pc) != breakpoints.end();
   }
 
@@ -363,6 +365,10 @@ namespace nall::GDB {
           shouldReply = false; // complete monitor reset halt at the reset-vector boundary
           return "";
         }
+        if(cmdName == "qUttoriContext") {
+          if(!hooks.captureContext || !isHalted()) return "E09";
+          return hooks.captureContext(cmd.slice(15));
+        }
         if(cmdName == "qUttoriCapture" || cmdName == "qUttoriCaptureFile") {
           if(!hooks.instructionTraceDetails || instructionTraceActive) return "E09";
           std::string response;
@@ -398,8 +404,10 @@ namespace nall::GDB {
           "QStartNoAckMode+",
           hooks.targetXML ? ";xmlRegisters+;qXfer:features:read+" : "", // (see: https://marc.info/?l=gdb&m=149901965961257&w=2)
           hooks.namedMemoryRead ? ";uttoriNamedMemory+" : "",
+          hooks.captureContext ? ";uttoriCaptureContext+" : "",
           hooks.instructionTrace ? ";uttoriInstructionTrace+" : "",
-          hooks.instructionTraceDetails ? ";uttoriInstructionDetails+;uttoriSramMemory+;uttoriAramMemory+;uttoriCaptureV2+" : ""
+          hooks.instructionTraceDetails && !capture.famicom ? ";uttoriInstructionDetails+;uttoriSramMemory+;uttoriAramMemory+" : "",
+          hooks.instructionTraceDetails ? ";uttoriCaptureV2+" : ""
         };}
 
         if(cmdName == "qUttoriMemoryRead") {
@@ -693,10 +701,16 @@ namespace nall::GDB {
     }
   }
 
-  auto Server::updateLoop() -> void {
-    // Runs at scheduler exits, including backpressure and independent GDB stops.
-    // Disk writes/syncs stay on the worker; this only copies/reclaims a bounded batch.
+  auto Server::serviceCapture() -> void {
+    // Save synchronization can resume a bus reservation while the frontend is
+    // guarded. Keep both file writers moving without reentrant debugger commands.
     captureFile.service(capture);
+    if(hooks.captureContextService) hooks.captureContextService();
+  }
+
+  auto Server::updateLoop() -> void {
+    // Disk writes/syncs stay on the worker; this only copies/reclaims a bounded batch.
+    serviceCapture();
     if(!isStarted())return;
 
     if(requestDisconnect) {
@@ -796,6 +810,7 @@ namespace nall::GDB {
     hooks.write = nullptr;
     hooks.checkedWrite = nullptr;
     hooks.normalizeAddress = nullptr;
+    hooks.breakpointMatches = nullptr;
     hooks.registersLittleEndian = false;
     hooks.regReadGeneral = nullptr;
     hooks.regWriteGeneral = nullptr;
@@ -807,6 +822,9 @@ namespace nall::GDB {
     hooks.targetXML = nullptr;
     hooks.instructionTrace = false;
     hooks.instructionTraceDetails = false;
+    hooks.captureContext = {};
+    hooks.captureContextService = {};
+    hooks.captureContextBoundary = {};
 
     resetClientData();
   }

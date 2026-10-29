@@ -21,6 +21,9 @@ struct PPU : Thread {
     } memory;
   } debugger;
 
+  // Passive debugger snapshot: v/t/bus, fine X, write latch, read buffer, OAM address, effective control/mask/status.
+  auto debugState() const -> std::array<u8, 13>;
+
   auto rate()           const -> u32 { return model->raster.clockDivider; }
   auto vlines()         const -> u32 { return model->raster.scanlines; }
   auto displayHeight()  const -> u32 { return model->raster.canvasHeight; }

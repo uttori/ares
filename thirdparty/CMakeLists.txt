@@ -4,6 +4,10 @@ target_include_directories(sljit PUBLIC ../thirdparty)
 target_compile_definitions(sljit PUBLIC SLJIT_HAVE_CONFIG_PRE=1 SLJIT_HAVE_CONFIG_POST=1)
 target_compile_options(sljit PRIVATE $<$<COMPILE_LANG_AND_ID:C,AppleClang,Clang,GNU>:-Wno-conditional-uninitialized>)
 
+# One full static Zstandard library serves capture encoding and optional CHD decoding.
+# Avoid linking the vendored decoder amalgamation alongside overlapping full symbols.
+add_subdirectory(zstd-1.5.7)
+
 option(ARES_ENABLE_CHD "Enable CHD format support via libchdr" ON)
 
 if(ARES_ENABLE_CHD)
@@ -19,11 +23,7 @@ if(ARES_ENABLE_CHD)
   )
   list(APPEND CHDR_LIBS miniz)
   
-  # zstd
-  option(ZSTD_BUILD_SHARED "BUILD SHARED LIBRARIES" OFF)
-  option(ZSTD_BUILD_PROGRAMS "BUILD PROGRAMS" OFF)
-  add_subdirectory(libchdr/deps/zstd-1.5.7 EXCLUDE_FROM_ALL)
-  list(APPEND CHDR_LIBS zstd)
+  list(APPEND CHDR_LIBS zstd::libzstd_static)
   #--------------------------------------------------
   # chdr
   #--------------------------------------------------
@@ -111,6 +111,5 @@ set_target_properties(sljit PROPERTIES FOLDER thirdparty PREFIX "")
 if(ARES_ENABLE_CHD)
   set_target_properties(chdr-static PROPERTIES FOLDER thirdparty PREFIX "")
   set_target_properties(miniz PROPERTIES FOLDER thirdparty PREFIX "")
-  set_target_properties(zstd PROPERTIES FOLDER thirdparty PREFIX "")
 endif()
 set_target_properties(qon PROPERTIES FOLDER thirdparty PREFIX "")

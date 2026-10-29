@@ -14,6 +14,7 @@ struct Gamepad : Controller {
   auto serialize(serializer&) -> void override;
 
 private:
+  u8 capturePort = 0;  // Zero-based physical controller port, for input evidence.
   bool latched = 0;
   u32  counter = 0;
 

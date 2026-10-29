@@ -1,11 +1,11 @@
-# Compile the actual method against a deterministic transport, without a socket or wall-clock sleeps.
+# Include the sink service helper with updateLoop so the real save-time path is tested too.
 set(polling_source "${CMAKE_SOURCE_DIR}/nall/nall/gdb/server.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${polling_source}")
 file(READ "${polling_source}" server_source)
-string(FIND "${server_source}" "  auto Server::updateLoop() -> void {" method_begin)
+string(FIND "${server_source}" "  auto Server::serviceCapture() -> void {" method_begin)
 string(FIND "${server_source}" "  auto Server::getStatusText(" method_end)
 if(method_begin LESS 0 OR method_end LESS_EQUAL method_begin)
-  message(FATAL_ERROR "Cannot locate Server::updateLoop in ${polling_source}")
+  message(FATAL_ERROR "Cannot locate Server::serviceCapture/updateLoop in ${polling_source}")
 endif()
 math(EXPR method_length "${method_end} - ${method_begin}")
 string(SUBSTRING "${server_source}" ${method_begin} ${method_length} polling_method)

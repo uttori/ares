@@ -16,11 +16,17 @@ auto MOS6502::idlePageAlways(n16 x, n16 y) -> void {
 }
 
 auto MOS6502::opcode() -> n8 {
-  return read(PC++);
+  n16 address = PC++;
+  n8 data = read(address);
+  fetched(address, data);
+  return data;
 }
 
 auto MOS6502::operand() -> n8 {
-  return read(PC++);
+  n16 address = PC++;
+  n8 data = read(address);
+  fetched(address, data);
+  return data;
 }
 
 auto MOS6502::load(n8 addr) -> n8 {

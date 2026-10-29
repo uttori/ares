@@ -3,7 +3,7 @@ auto CPU::read(n16 address) -> n8 {
     dma(address);
   }
 
-  n8 data = readBus(address);
+  n8 data = captureRead(address);
   if(address != 0x4015) io.openBus = data;
   step(rate());
   return data;
@@ -11,7 +11,7 @@ auto CPU::read(n16 address) -> n8 {
 
 auto CPU::write(n16 address, n8 data) -> void {
   io.rwLine = 1;
-  writeBus(address, data);
+  captureWrite(address, data);
   io.openBus = data;
   step(rate());
   io.rwLine = 0;
@@ -52,7 +52,7 @@ auto CPU::dma(n16 address) -> void {
   bool skipDummyReads = (address == 0x4016 || address == 0x4017);
 
   // halt read
-  io.openBus = readBus(address);
+  io.openBus = captureRead(address, 3);
   step(rate());
 
   while (io.dmcDMAPending || io.oamDMAPending) {
@@ -60,7 +60,7 @@ auto CPU::dma(n16 address) -> void {
       // put_cycle
       if (io.oamDMAPending && oamWriteReady) {
         // oam write
-        writeBus(0x2004, io.openBus);
+        captureWrite(0x2004, io.openBus, 1);
         step(rate());
 
         oamWriteReady = false;
@@ -72,14 +72,14 @@ auto CPU::dma(n16 address) -> void {
         io.dmcDummyRead = 1;
 
         if (!skipDummyReads)
-          io.openBus = readBus(address);
+          io.openBus = captureRead(address, 3);
         step(rate());
       }
     } else {
       // get_cycle
       if (io.dmcDMAPending && io.dmcDummyRead) {
         // dmc read
-        io.openBus = readBus(apu.dmc.dmaAddress());
+        io.openBus = captureRead(apu.dmc.dmaAddress(), 2);
         step(rate());
 
         apu.dmc.setDMABuffer(io.openBus);
@@ -89,7 +89,7 @@ auto CPU::dma(n16 address) -> void {
           io.dmcDummyRead = 1;
 
         // oam read
-        io.openBus = readBus(io.oamDMAPage << 8 | oamCounter);
+        io.openBus = captureRead(io.oamDMAPage << 8 | oamCounter, 1);
         step(rate());
 
         oamWriteReady = true;
@@ -98,7 +98,7 @@ auto CPU::dma(n16 address) -> void {
 
         // dmc dummy read cycle
         if (!skipDummyReads)
-          io.openBus = readBus(address);
+          io.openBus = captureRead(address, 3);
         step(rate());
       }
     }
@@ -112,8 +112,13 @@ auto CPU::nmiLine(bool line) -> void {
 }
 
 auto CPU::irqLine(bool line) -> void {
-  //level-sensitive
+  // Board output can change in the PPU coroutine before the cartridge thread
+  // drives this pin. Retain that propagation separately from the A12 event.
+  bool recording = io.irqLine != line && captureNesReady();
+  std::array<u8, 8> before{};
+  if(recording) before = cartridge.board->debugIRQ();
   io.irqLine = line;
+  if(recording) captureNesTimeline(3, 0, line, before);
 }
 
 auto CPU::apuLine(bool line) -> void {

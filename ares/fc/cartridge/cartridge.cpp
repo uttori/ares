@@ -1,4 +1,5 @@
 #include <fc/fc.hpp>
+#include <nall/gdb/server.hpp>
 
 namespace ares::Famicom {
 
@@ -61,7 +62,12 @@ auto Cartridge::readPRG(n32 address, n8 data) -> n8 {
 }
 
 auto Cartridge::writePRG(n32 address, n8 data) -> void {
-  return board->writePRG(address, data);
+  bool recording = address >= 0xc000 && nall::GDB::server.capture.busTarget().nesBusActive()
+    && board->debugMapper()[0] == 4 && captureNesReady();
+  std::array<u8, 8> before{};
+  if(recording) before = board->debugIRQ();
+  board->writePRG(address, data);
+  if(recording) captureNesTimeline(2, address, data, before);
 }
 
 auto Cartridge::readCHR(n32 address, n8 data) -> n8 {
@@ -73,7 +79,12 @@ auto Cartridge::writeCHR(n32 address, n8 data) -> void {
 }
 
 auto Cartridge::ppuAddressBus(n14 address) -> void {
-  return board->ppuAddressBus(address);
+  if(!nall::GDB::server.capture.busTarget().nesBusActive()) return board->ppuAddressBus(address);
+  auto before = board->debugIRQ();
+  bool edge = before[4] != bool(address & 0x1000) && board->debugMapper()[0] == 4;
+  bool recording = edge && captureNesReady();
+  board->ppuAddressBus(address);
+  if(recording) captureNesTimeline(1, address, 0, before);
 }
 
 auto Cartridge::scanline(n32 y) -> void {

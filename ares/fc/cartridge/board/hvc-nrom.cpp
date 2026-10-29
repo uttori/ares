@@ -31,6 +31,36 @@ struct HVC_NROM : Interface {
     return programROM.read(address);
   }
 
+  auto debugPRGOffset(n16 address) -> maybe<u32> override {
+    if(address < 0x8000 || !programROM) return {};
+    return u32(address) & (programROM.size() - 1);
+  }
+
+  auto debugMapper() -> std::array<u8, 18> override {
+    std::array<u8, 18> state{};
+    state[0] = 0; state[13] = bool(programRAM); state[14] = 1; state[15] = !mirror;
+    return state;
+  }
+
+  auto debugRead(const string& space, u32 address) -> maybe<n8> override {
+    if(space == "nes.prg-rom" && address < programROM.size()) return programROM.read(address);
+    if(space == "nes.chr-rom" && address < characterROM.size()) return characterROM.read(address);
+    if(space == "nes.chr-ram" && address < characterRAM.size()) return characterRAM.read(address);
+    if(space == "nes.prg-ram" && address < programRAM.size()) return programRAM.read(address);
+    if(space == "nes.cpu") {
+      if(auto offset = debugPRGOffset(address)) return programROM.read(*offset);
+      if(address >= 0x6000 && address < 0x8000 && programRAM) { return programRAM.read(address & 0x1fff); }
+    }
+    return {};
+  }
+
+  auto debugPPUAddress(n14 address) -> maybe<DebugPPUAddress> override {
+    if(address & 0x2000) return DebugPPUAddress{3, u32(address >> !mirror & 0x0400 | (n10)address), true};
+    if(characterROM) return DebugPPUAddress{1, u32(address) & (characterROM.size() - 1), false};
+    if(characterRAM) return DebugPPUAddress{2, u32(address) & (characterRAM.size() - 1), true};
+    return {};
+  }
+
   auto writePRG(n32 address, n8 data) -> void override {
     if(address < 0x6000) return;
     if(address < 0x8000 && !programRAM) return;
@@ -52,7 +82,10 @@ struct HVC_NROM : Interface {
       address = address >> !mirror & 0x0400 | (n10)address;
       return ppu.writeCIRAM(address, data);
     }
-    if(characterRAM) return characterRAM.write(address, data);
+    if(characterRAM) {
+      cpu.capturePPUWrite(1, u32(address) & (characterRAM.size() - 1), data);
+      return characterRAM.write(address, data);
+    }
   }
 
   auto power() -> void override {

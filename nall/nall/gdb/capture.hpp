@@ -23,6 +23,39 @@
 namespace ares_capture {
 class Capture {
 public:
+  // Caller zeroes any checksum field first. Works on physical raw or compressed
+  // bytes, using bounded scratch owned by the caller and no allocations.
+  static auto crc32c(const uint8_t* p, size_t length) -> uint32_t {
+    // Sealing is paid on every byte, including the PPU extension. A fixed 1 KiB
+    // Castagnoli table replaces eight polynomial steps per byte without changing
+    // the checksum or allocating per chunk. The independent test reader stays bitwise.
+    static constexpr auto crcTable = [] {
+      std::array<uint32_t, 256> table{};
+      for(unsigned i = 0; i < table.size(); ++i) {
+        uint32_t crc = i;
+        for(unsigned bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0x82f63b78u & (0u - (crc & 1)));
+        table[i] = crc;
+      }
+      return table;
+    }();
+    uint32_t crc = ~uint32_t(0);
+    uint32_t i = 0;
+    // Intrinsics are used only when the compiler target promises CRC support;
+    // portable builds retain the exact Castagnoli fallback. memcpy permits
+    // unaligned records without aliasing undefined behavior. Wire bytes are LE.
+#if (defined(__ARM_FEATURE_CRC32) || (defined(__SSE4_2__) && defined(__x86_64__))) && !defined(ARES_CAPTURE_PORTABLE_CRC) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    for(; i + 8 <= length; i += 8) {
+      uint64_t word; std::memcpy(&word, p + i, 8);
+#if defined(__ARM_FEATURE_CRC32)
+      crc = __crc32cd(crc, word);
+#else
+      crc = uint32_t(_mm_crc32_u64(crc, word));
+#endif
+    }
+#endif
+    for(; i < length; ++i) crc = (crc >> 8) ^ crcTable[(crc ^ p[i]) & 255];
+    return ~crc;
+  }
   static constexpr uint32_t chunkBytes = 262144;
   static constexpr uint32_t recordReserve = 71; // 32 common + 19 identity + 4 fetched + 16 state
   static constexpr uint32_t busRecordBytes = 64;
@@ -50,8 +83,51 @@ public:
   // the Capture/Server object layout and never add work to disabled bus hooks.
   static inline thread_local bool profileSeals{};
   static inline thread_local uint64_t sealNanoseconds{};
+  // Selected by the system hook installation, never inferred from register values.
+  bool famicom = false;
+  static constexpr uint32_t nesRecordReserve = 91; // common + identity + three bytes + 37-byte state
+  auto architectureName() const -> const char* { return famicom ? "65xx.2a03" : "snes.65816"; }
+  auto addressSpaceName() const -> const char* { return famicom ? "nes.cpu" : "snes.cpu"; }
+  auto clockName() const -> const char* { return famicom ? "nes.master" : "snes.master"; }
+  auto beginNes(uint16_t pc, const std::array<uint8_t, 7>& registers,
+                const std::array<uint8_t, 18>& mapper, uint64_t cycle) -> void {
+    begin(pc, {}, cycle);
+    std::copy(registers.begin(), registers.end(), pendingNes.begin());
+    std::copy(mapper.begin(), mapper.end(), pendingNes.begin() + 7);
+    std::fill(pendingNes.begin() + 25, pendingNes.end(), 255);
+  }
+  auto fetchNes(uint8_t value, uint32_t physical) -> void {
+    if(!pending || busOnly) return;
+    if(fetchedCount >= 3) { fail("nes-fetched-byte-bound"); return; }
+    put(pendingNes.data() + 25 + fetchedCount * 4, physical, 4);
+    fetch(value);
+  }
+  // NES bus records have a separate dictionary; no SNES DMA or PPU fields are reused.
+  static constexpr uint32_t nesBusRecordBytes = 128;
+  auto nesBusActive() const -> bool { return famicom && busOnly && recording; }
+  auto nesBus(const std::array<uint8_t, 96>& body, uint64_t cycle) -> void {
+    if(!nesBusActive()) return;
+    auto* out = append(4, nesBusRecordBytes, cycle);
+    if(!out) return;
+    std::memcpy(out + 32, body.data(), body.size());
+    put(out + 32, pending ? ordinal : 0, 8);
+    if(pending) { put(out + 40, pendingPC, 2); out[47] = 1; }
+  }
+  // PPU/mapper records share the observer's CPU epoch; body[0..7] retains the
+  // exact source-device master tick because auxiliary coroutines can run ahead.
+  auto nesTimeline(const std::array<uint8_t, 96>& body, uint64_t cycle) -> void {
+    if(!nesBusActive()) return;
+    auto* out = append(5, nesBusRecordBytes, cycle);
+    if(out) std::memcpy(out + 32, body.data(), body.size());
+  }
   auto active() const -> bool { return recording; }
   auto busScope() const -> bool { return busOnly; }
+  // Optional full-capture graphics companion. It has its own session, scope and sink;
+  // instruction records and their ownership counters never contain bus events.
+  Capture* graphics = nullptr;
+  auto busTarget() -> Capture& { if(graphics) return *graphics; return *this; }
+  auto eventCount() const -> uint64_t { return produced; }
+  auto instructionCount() const -> uint64_t { return ordinal; }
   auto busActive() const -> bool { return busOnly && recording; }
   auto transferActive() const -> bool { return transfers && recording; }
   auto ppuActive() const -> bool { return ppuEffects && recording; }
@@ -81,6 +157,7 @@ public:
   // Called BEFORE an instruction or bus operation begins. A false return
   // requires yielding to the frontend without performing that operation.
   auto ready() -> bool {
+    if(graphics && !graphics->ready()) return false;
     if(failed) return false;
     if(!recording) return true;
     bool tailRoom = false;
@@ -100,6 +177,7 @@ public:
   }
 
   auto begin(uint64_t pc, const std::array<uint16_t, 10>& registers, uint64_t cycle) -> void {
+    if(graphics && graphics->active()) graphics->begin(pc, registers, cycle);
     if(!recording) return;
     if(pending || !ready() || produced == UINT64_MAX || ordinal == UINT64_MAX) { fail("instruction-reserve"); return; }
     ++ordinal;
@@ -114,20 +192,26 @@ public:
   // WAI/STP commit on their first idle boundary. Subsequent idle cycles and
   // interrupt entry are excluded by this instruction-only scope.
   auto end() -> void {
+    if(graphics) graphics->end();
     if(!pending) return;
     pending = false;
     if(busOnly) return;
     if(!fetchedCount) { fail("missing-fetched-bytes"); return; }
-    uint32_t length = 67 + fetchedCount;
+    uint32_t stateBytes = famicom ? 37 : 16;
+    uint32_t length = 51 + stateBytes + fetchedCount;
     auto* out = append(1, length, pendingCycle);
     if(!out) return;
     put(out + 32, ordinal, 8);
-    put(out + 40, pendingPC, 8); out[48] = fetchedCount; put(out + 49, 16, 2);
+    put(out + 40, pendingPC, 8); out[48] = fetchedCount; put(out + 49, stateBytes, 2);
     std::memcpy(out + 51, fetched.data(), fetchedCount);
     auto* regs = out + 51 + fetchedCount;
+    if(famicom) {
+      std::memcpy(regs, pendingNes.data(), pendingNes.size());
+    } else {
     for(unsigned i = 0; i < 5; ++i) put(regs + i * 2, pendingState[i], 2);
     regs[10] = pendingState[5]; regs[11] = pendingState[6];
     put(regs + 12, pendingState[7], 2); regs[14] = pendingState[8]; regs[15] = pendingState[9];
+    }
     auto& tail = queue[(head + size - 1) % queue.size()];
     if(!recording) { seal(tail); state = "draining"; }
   }
@@ -196,6 +280,7 @@ public:
   }
 
   auto fail(const std::string& reason) -> void {
+    if(graphics) graphics->fail(reason);
     if(session.empty() || state == "complete" || state == "incomplete") return;
     recording = pending = false; failed = true; state = "incomplete"; error = reason;
     if(size) seal(queue[(head + size - 1) % queue.size()]);
@@ -204,8 +289,12 @@ public:
   auto command(const std::string& request) -> std::string {
     auto fields = split(request);
     if(fields.empty()) return "E01";
+    if(famicom && (fields[0] == "bus-capabilities" || fields[0] == "transfer-capabilities" ||
+      (fields[0] == "start" && fields.size() != 2 && !(fields.size() == 3 && fields[2] == "bus-ppu")))) return "E09";
+    if(famicom && fields[0] == "ppu-capabilities" && fields.size() == 1)
+      return "{\"version\":2,\"scope\":\"nes.cpu-bus-ppu\",\"mode\":\"lossless\",\"ownership\":\"durable-prefix\",\"maxChunkBytes\":262144,\"requiredReserveBytes\":128,\"overheadBytes\":4194304,\"resumeSession\":false}";
     if(fields[0] == "capabilities" && fields.size() == 1)
-      return "{\"version\":2,\"scope\":\"snes.65816.instructions\",\"mode\":\"lossless\",\"ownership\":\"durable-prefix\",\"maxChunkBytes\":262144,\"requiredReserveBytes\":71,\"overheadBytes\":4194304,\"resumeSession\":false}";
+      return "{\"version\":2,\"scope\":\"" + std::string(famicom ? "nes.2a03.instructions" : "snes.65816.instructions") + "\",\"mode\":\"lossless\",\"ownership\":\"durable-prefix\",\"maxChunkBytes\":262144,\"requiredReserveBytes\":" + std::to_string(famicom ? nesRecordReserve : recordReserve) + ",\"overheadBytes\":4194304,\"resumeSession\":false}";
     if(fields[0] == "bus-capabilities" && fields.size() == 1)
       return "{\"version\":2,\"scope\":\"snes.cpu-bus\",\"mode\":\"lossless\",\"ownership\":\"durable-prefix\",\"maxChunkBytes\":262144,\"requiredReserveBytes\":64,\"overheadBytes\":4194304,\"resumeSession\":false}";
     if(fields[0] == "transfer-capabilities" && fields.size() == 1)
@@ -227,7 +316,9 @@ public:
       try { fresh.resize((budget - overheadBytes) / sizeof(Chunk)); }
       catch(...) { return "E04"; }
       auto numerator = clockNumerator, denominator = clockDenominator;
+      bool selectedFamicom = famicom;
       *this = Capture{};
+      famicom = selectedFamicom;
       profileSeals = false; sealNanoseconds = 0;
       busOnly = fields.size() == 3;
       ppuEffects = busOnly && fields[2] == "bus-ppu";
@@ -321,6 +412,7 @@ public:
   auto incomplete() const -> bool { return state == "incomplete"; }
   auto complete() const -> bool { return state == "complete"; }
   auto scopeName() const -> const char* {
+    if(famicom) return busOnly ? "nes.cpu-bus-ppu" : "nes.2a03.instructions";
     if(ppuEffects) return "snes.cpu-bus-ppu";
     if(transfers) return "snes.cpu-bus-transfers";
     return busOnly ? "snes.cpu-bus" : "snes.65816.instructions";
@@ -329,9 +421,7 @@ public:
 
   auto status() const -> std::string {
     auto q = [](uint64_t v) { return "\"" + std::to_string(v) + "\""; };
-    auto scope = busOnly ? "snes.cpu-bus" : "snes.65816.instructions";
-    if(transfers) scope = "snes.cpu-bus-transfers";
-    if(ppuEffects) scope = "snes.cpu-bus-ppu";
+    auto scope = scopeName();
     return "{\"scope\":\"" + std::string(scope) +
       "\",\"session\":\"" + session + "\",\"state\":\"" + (throttled && recording ? "throttled" : state) +
       "\",\"producedThrough\":" + q(produced) + ",\"deliveredThrough\":" + q(delivered) +
@@ -344,6 +434,7 @@ public:
   }
 
 private:
+  std::array<uint8_t, 37> pendingNes{};
   std::vector<Chunk> queue;
   size_t head{}, size{}, highWater{};
   std::string session, state{"idle"}, error;
@@ -365,9 +456,11 @@ private:
   uint8_t fetchedCount{};
 
   auto reserveBytes() const -> uint32_t {
+    if(famicom && busOnly) return nesBusRecordBytes;
     if(ppuEffects) return ppuRecordBytes;
     if(transfers) return transferRecordBytes;
-    return busOnly ? busRecordBytes : recordReserve;
+    if(busOnly) return busRecordBytes;
+    return famicom ? nesRecordReserve : recordReserve;
   }
 
   // Commit one record into already reserved queue capacity. Both scopes share
@@ -386,7 +479,7 @@ private:
     auto& tail = queue[(head + size - 1) % queue.size()];
     auto* out = tail.bytes.data() + tail.used;
     put(out, kind, 2); put(out + 2, 1, 2); put(out + 4, length, 4);
-    put(out + 8, ++produced, 8); put(out + 16, 0, 4); put(out + 20, 0, 4);
+    put(out + 8, ++produced, 8); put(out + 16, famicom ? 1 : 0, 4); put(out + 20, famicom ? 1 : 0, 4);
     put(out + 24, cycle, 8);
     tail.used += length; ++tail.count;
     return out;
@@ -426,35 +519,7 @@ private:
     put(p + 40, chunk.count, 4); put(p + 44, 64, 4);
     put(p + 48, chunk.used - 64, 4); put(p + 52, chunk.used - 64, 4);
     put(p + 56, 0, 8);
-    // Sealing is paid on every byte, including the PPU extension. A fixed 1 KiB
-    // Castagnoli table replaces eight polynomial steps per byte without changing
-    // the checksum or allocating per chunk. The independent test reader stays bitwise.
-    static constexpr auto crcTable = [] {
-      std::array<uint32_t, 256> table{};
-      for(unsigned i = 0; i < table.size(); ++i) {
-        uint32_t crc = i;
-        for(unsigned bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0x82f63b78u & (0u - (crc & 1)));
-        table[i] = crc;
-      }
-      return table;
-    }();
-    uint32_t crc = ~uint32_t(0);
-    uint32_t i = 0;
-    // Intrinsics are used only when the compiler target promises CRC support;
-    // portable builds retain the exact Castagnoli fallback. memcpy permits
-    // unaligned records without aliasing undefined behavior. Wire bytes are LE.
-#if (defined(__ARM_FEATURE_CRC32) || (defined(__SSE4_2__) && defined(__x86_64__))) && !defined(ARES_CAPTURE_PORTABLE_CRC) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-    for(; i + 8 <= chunk.used; i += 8) {
-      uint64_t word; std::memcpy(&word, p + i, 8);
-#if defined(__ARM_FEATURE_CRC32)
-      crc = __crc32cd(crc, word);
-#else
-      crc = uint32_t(_mm_crc32_u64(crc, word));
-#endif
-    }
-#endif
-    for(; i < chunk.used; ++i) crc = (crc >> 8) ^ crcTable[(crc ^ p[i]) & 255];
-    put(p + 56, ~crc, 4); chunk.sealed = true;
+    put(p + 56, crc32c(p, chunk.used), 4); chunk.sealed = true;
     if(profileSeals) sealNanoseconds += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
   }
 };

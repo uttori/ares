@@ -3,6 +3,7 @@ auto PPU::readCIRAM(n11 address) -> n8 {
 }
 
 auto PPU::writeCIRAM(n11 address, n8 data) -> void {
+  cpu.capturePPUWrite(2, address, data);
   ciram[address] = data;
 }
 
@@ -14,10 +15,13 @@ auto PPU::readCGRAM(n5 address) -> n6 {
 }
 
 auto PPU::writeCGRAM(n5 address, n6 data) -> void {
+  cpu.capturePPUWrite(3, address, data);
   cgram[address] = data;
 
-  if((address & 0x3) == 0x0)
+  if((address & 0x3) == 0x0) {
+    cpu.capturePPUWrite(3, address ^ 0x10, data);
     cgram[address ^ 0x10] = data;
+  }
 }
 
 auto PPU::readIO(n16 address) -> n8 {
@@ -124,6 +128,7 @@ auto PPU::writeIO(n16 address, n8 data) -> void {
     // increment of OAMADDR, bumping only the high 6 bits
     if(model->raster.restrictsOAM(io.ly)) {
       if (enable()) {
+        cpu.capturePPUBlocked(4);
         ++sprite.oamMainCounterIndex;
         sprite.oamMainCounterTiming = 0;
         return;
@@ -137,6 +142,7 @@ auto PPU::writeIO(n16 address, n8 data) -> void {
     if (sprite.oamMainCounterTiming == 2)
       data.bit(2,4) = 0;
 
+    cpu.capturePPUWrite(4, sprite.oamAddress, data);
     oam[sprite.oamAddress] = data;
     ++sprite.oamMainCounter;
     break;

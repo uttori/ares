@@ -9,7 +9,7 @@ struct ControllerPort {
 
   auto iobit() -> bool { if(device) return device->iobit(); return 0; }
   auto iobit(n1 data) -> void { if(device) return device->iobit(data); }
-  auto data() -> n2 { if(device) return device->data(); return 0; }
+  auto data() -> n2;
   auto latch(n1 data) -> void { if(device) return device->latch(data); }
 
   auto serialize(serializer&) -> void;

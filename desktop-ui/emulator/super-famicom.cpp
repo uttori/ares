@@ -3,6 +3,7 @@ struct SuperFamicom : Emulator {
   auto load() -> LoadResult override;
   auto save() -> bool override;
   auto pak(ares::Node::Object) -> std::shared_ptr<vfs::directory> override;
+  // Attach the five-player adapter explicitly on port 2; new games keep the normal defaults.
   auto portMenu(Menu& portMenu, ares::Node::Port port) -> void override;
 
   std::shared_ptr<mia::Pak> gb, bs, stA, stB;
@@ -107,6 +108,7 @@ SuperFamicom::SuperFamicom() {
     ports.push_back(port);
   }
 
+  // Adapter sockets inherit players 2-5, independently of the console's first gamepad.
   for(auto id : range(4)) {
     InputPort port{string{"Multitap Port ", 1 + id}};
     InputDevice device{"Gamepad"};
@@ -126,6 +128,7 @@ SuperFamicom::SuperFamicom() {
     ports.push_back(port);
   }
 
+  // The custom menu exposes the adapter only on the port with matching input mappings.
   inputBlacklist = {"Justifiers", "Super Multitap"};
 }
 
@@ -134,6 +137,7 @@ auto SuperFamicom::portMenu(Menu& portMenu, ares::Node::Port port) -> void {
 
   MenuRadioItem item{&portMenu};
   item.setText("Super Multitap");
+  // Join the standard peripheral group to keep a single connected device checked.
   if(auto group = portMenu.action(0)->group()) group.append(item);
   if(auto connected = port->connected()) {
     if(connected->name() == "Super Multitap") item.setChecked();
@@ -143,8 +147,10 @@ auto SuperFamicom::portMenu(Menu& portMenu, ares::Node::Port port) -> void {
     if(auto multitap = port->allocate("Super Multitap")) {
       u32 id = 0;
       for(auto socket : ares::Node::enumerate<ares::Node::Port>(multitap)) {
+        // Input lookup uses names, and the core's socket names overlap the console ports.
         string name{"Multitap Port ", ++id};
         socket->setName(name);
+        // Only gamepads have mappings here; nested adapters must not be offered.
         socket->setSupported({"Gamepad"});
         socket->allocate("Gamepad");
         socket->connect();

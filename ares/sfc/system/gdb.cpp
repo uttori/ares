@@ -21,7 +21,10 @@ auto normalizeGdbRegisters() -> void {
 
 auto installGdbHooks() -> void {
   using nall::GDB::server;
+  server.capture.famicom = false;
   server.hooks.instructionBoundaryStop = true;
+  server.hooks.instructionTrace = true;
+  server.hooks.instructionTraceDetails = true;
   server.hooks.emuReset = [] { system.power(true); };
   server.hooks.registersLittleEndian = true;
   server.hooks.targetXML = []() -> string {

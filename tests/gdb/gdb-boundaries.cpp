@@ -21,6 +21,7 @@ auto output() -> string {
 auto nall::main(Arguments) -> void {
   server.hooks.instructionBoundaryStop = true;
   server.onConnect();
+  assert(!command("qSupported").find("uttoriInstructionBoundaryStop+"));
   assert(command("?") == "" && !reply && server.isStopPending() && !server.isHalted());
   assert(output() == "");
   assert(command("g") == "E00");
@@ -30,6 +31,12 @@ auto nall::main(Arguments) -> void {
   assert(!server.reportPC(0x808000) && output() == "");
   assert(command("Z0,808000,1") == "OK");
   command("s"); assert(!reply);
+  // A full capture queue may revisit the breakpoint before executing the step.
+  // Neither the step nor its one-instruction breakpoint bypass may be consumed.
+  for(unsigned wait = 0; wait < 3; ++wait) {
+    assert(server.reportPC(0x808000, true, false));
+    assert(server.singleStepActive && server.skipBreakpointOnce && !server.forceHalt);
+  }
   assert(server.reportPC(0x808000));
   assert(!server.reportPC(0x808001) && server.isHalted());
   output();

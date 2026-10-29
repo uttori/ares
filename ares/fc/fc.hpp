@@ -33,4 +33,11 @@ namespace ares::Famicom {
   #include <fc/apu/apu.hpp>
   #include <fc/ppu/ppu.hpp>
   #include <fc/fds/fds.hpp>
+
+  auto captureControllerInput(u8 slot, u8 value) -> u8;
+  auto captureControllerPoll(Node::Input::Button button, u8 slot) -> void;
+  // A reservation can yield only to the frontend; re-check recording before the observed operation.
+  auto captureNesReady() -> bool;
+  // Source 0 CPU, 1 PPU, 2 cartridge. Device time is reconstructed from scheduler-relative clocks.
+  auto captureNesTimeline(u8 kind, u16 address, u8 value, const std::array<u8, 8>& before) -> void;
 }

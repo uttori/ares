@@ -3,6 +3,9 @@ add_library(ares::nall ALIAS nall)
 
 add_library(nall-headers INTERFACE)
 add_library(ares::nall::headers ALIAS nall-headers)
+# Native capture uses the full encoder even when CHD support is disabled. A static
+# link keeps distributed runtimes independent of a package-manager shared library.
+target_link_libraries(nall-headers INTERFACE zstd::libzstd_static)
 target_link_libraries(nall PUBLIC ares::nall::headers)
 if(ARES_ENABLE_CHD)
   target_compile_definitions(nall-headers INTERFACE ARES_ENABLE_CHD)

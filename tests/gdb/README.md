@@ -31,6 +31,12 @@ paths, platform libraries, and the core profile come from the normal ares build.
   remain unchanged during each snapshot, and no duplicate stop packet is sent.
   A bounded scheduler-event guard makes the original hang fail immediately;
   CTest also imposes a ten-second timeout.
+- `gdb-capture-save` saves while a native bus or full recording is suspended
+  inside maximum eight-channel DMA, then repeats saves while halted, continues
+  recording, finalizes both ACT2 streams and reloads the state. It runs with both
+  PPU implementations through `tests/gdb-capture/run-tests.sh`. Streamed bus
+  captures decline synchronized saves without losing the recording or moving
+  the existing desktop save slot; native recordings keep recording through saves.
 
 Only the test translation units use `-fno-access-control` to inspect protocol
 state. Each test undefines `NDEBUG` after including nall and before `<cassert>`:
