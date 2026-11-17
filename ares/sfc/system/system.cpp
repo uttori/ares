@@ -128,6 +128,7 @@ auto System::save() -> void {
 }
 
 auto System::power(bool reset) -> void {
+  if(reset && nativeVideo.discontinuity) nativeVideo.discontinuity();
   for(auto& setting : node->find<Node::Setting::Setting>()) setting->setLatch();
 
   random.entropy(Random::Entropy::Low);

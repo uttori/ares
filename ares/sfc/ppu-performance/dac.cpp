@@ -30,6 +30,7 @@ auto PPU::DAC::render() -> void {
     output += Region::PAL() ? 22 : 26;
 
     u32 luma = self.io.displayBrightness << 15;
+    if(self.hires() && nativeVideo.receive) nativeVideo.hires = true;
     if(!self.hires()) {
       for(u32 x : range(256)) {
         u32 color = luma | pixel(x, above[x], below[x]);

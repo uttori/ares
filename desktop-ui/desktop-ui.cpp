@@ -80,6 +80,9 @@ auto nall::main(Arguments arguments) -> void {
     program.startPseudoFullScreen = true;
   }
 
+  #if defined(ARES_ENABLE_FFV1)
+  program.recordNextGame = arguments.take("--record-next-game");
+  #endif
   if(arguments.take("--kiosk")) {
     program.kiosk = true;
     program.noFilePrompt = true;
@@ -160,6 +163,9 @@ auto nall::main(Arguments arguments) -> void {
 #if defined(PLATFORM_WINDOWS)
     print("  --terminal            Create new terminal window\n");
 #endif
+    #if defined(ARES_ENABLE_FFV1)
+    print("  --record-next-game    Arm native SNES FFV1 recording before power-on\n");
+    #endif
     print("  --fullscreen          Start in full screen mode\n");
     print("  --pseudofullscreen    Start in psuedo full screen mode\n");
     print("  --kiosk               Start in minimal UI mode (implies --no-file-prompt)\n");

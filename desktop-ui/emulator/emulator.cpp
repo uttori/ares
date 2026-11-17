@@ -209,6 +209,9 @@ auto Emulator::load(const string& location) -> bool {
   applyPeripheralConfiguration();
 
   latch = {};
+  #if defined(ARES_ENABLE_FFV1)
+  if(program.recordNextGame) program.startRecording(true);
+  #endif
   root->power();
   return true;
 }

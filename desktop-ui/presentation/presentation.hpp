@@ -70,6 +70,10 @@ struct Presentation : Window {
       MenuItem undoSaveStateMenu{&toolsMenu};
       MenuItem undoLoadStateMenu{&toolsMenu};
       MenuItem captureScreenshot{&toolsMenu};
+      #if defined(ARES_ENABLE_FFV1)
+      MenuCheckItem recordNextGame;  // The Load menu is rebuilt after each game change.
+      MenuItem recordVideo{&toolsMenu};
+      #endif
       MenuSeparator toolsMenuSeparatorA{&toolsMenu};
       MenuCheckItem pauseEmulation{&toolsMenu};
       MenuItem frameAdvance{&toolsMenu};

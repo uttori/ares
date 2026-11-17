@@ -30,6 +30,9 @@ auto Program::paletteUpdate() -> void {
 auto Program::runAheadUpdate() -> void {
   Program::Guard guard;
   runAhead = settings.general.runAhead;
+  #if defined(ARES_ENABLE_FFV1)
+  if(movieActive) runAhead = false;  // A movie contains only committed frames and audio.
+  #endif
   if(!emulator) return;
   if(emulator->name == "Game Boy Advance") runAhead = false;  //crashes immediately
   if(emulator->name == "Neo Geo Pocket") runAhead = false;  //white screen

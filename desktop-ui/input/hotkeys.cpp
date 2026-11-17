@@ -105,6 +105,10 @@ auto InputManager::createHotkeys() -> void {
     program.requestFrameAdvance = true;
   }));
 
+  #if defined(ARES_ENABLE_FFV1)
+  hotkeys.push_back(InputHotkey("Record Video").onPress([&] { program.toggleRecording(); }));
+  #endif
+
   hotkeys.push_back(InputHotkey("Capture Screenshot").onPress([&] {
     Program::Guard guard;
     if(!emulator) return;

@@ -1,4 +1,5 @@
 #include "../desktop-ui.hpp"
+#include "recording.cpp"
 #include "platform.cpp"
 #include "load.cpp"
 #include "states.cpp"

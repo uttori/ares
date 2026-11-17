@@ -140,6 +140,10 @@ auto Program::audioFrequencyUpdate() -> void {
     settings.audio.frequency = ruby::audio.frequency();
   }
   ruby::audio.setFrequency(settings.audio.frequency);
+  #if defined(ARES_ENABLE_FFV1)
+  // A track has one sample clock. A driver may negotiate a different rate from the request.
+  if(movie && movie->sampleRate() != ruby::audio.frequency()) stopRecording();
+  #endif
 
   for(auto& stream : streams) {
     stream->setResamplerFrequency(ruby::audio.frequency());

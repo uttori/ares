@@ -25,6 +25,18 @@ auto Program::updateMessage() -> void {
     presentation.statusRight.setText("Unloaded");
   }
 
+  #if defined(ARES_ENABLE_FFV1)
+  bool active = movieActive.load();
+  if(active) presentation.statusRight.setText("Recording");
+  else if(recordNextGame) presentation.statusRight.setText("Recording armed");
+  else if(emulator && paused) presentation.statusRight.setText("Paused");
+  if(!kiosk) {
+    if(presentation.recordNextGame.checked() != recordNextGame) presentation.recordNextGame.setChecked(recordNextGame);
+    string label = active ? "Stop Recording" : "Record Video";
+    if(presentation.recordVideo.text() != label) presentation.recordVideo.setText(label);
+  }
+  #endif
+
   if (message.text == "") {
     if (emulator && keyboardCaptured) {
       presentation.statusLeft.setText("Keyboard capture is active");
