@@ -1,8 +1,10 @@
 #include <sfc/sfc.hpp>
+#include "bt-gamecart.hpp"
 
 namespace ares::SuperFamicom {
 
 Cartridge& cartridge = cartridgeSlot.cartridge;
+#include "bt-gamecart.cpp"
 #include "slot.cpp"
 #include "load.cpp"
 #include "save.cpp"
@@ -24,6 +26,9 @@ auto Cartridge::connect() -> void {
   information.board  = pak->attribute("board");
 
   loadCartridge();
+  if(auto download = pak->read("bt.download.rom"); download && rom.size() == 64_KiB) {
+    btGameCart.connect(download);
+  }
   if(has.SA1) sa1.load(node);
   if(has.SuperFX) superfx.load(node);
   if(has.ARMDSP) armdsp.load(node);
@@ -60,6 +65,7 @@ auto Cartridge::disconnect() -> void {
   if(has.SufamiTurboSlotA) sufamiturboSlotA.unload();
   if(has.SufamiTurboSlotB) sufamiturboSlotB.unload();
 
+  btGameCart.disconnect();
   rom.reset();
   ram.reset();
   bus.reset();
@@ -68,6 +74,7 @@ auto Cartridge::disconnect() -> void {
 }
 
 auto Cartridge::power(bool reset) -> void {
+  if(btGameCart.active()) btGameCart.power();
   if(has.ICD) icd.power();
   if(has.MCC) mcc.power();
   if(has.DIP) dip.power();
@@ -92,6 +99,7 @@ auto Cartridge::save() -> void {
   if(!node) return;
 
   saveCartridge();
+  if(auto saved = pak->write("bt.save.ram")) ram.save(saved);
   if(has.GameBoySlot) icd.save();
   if(has.BSMemorySlot) bsmemory.save();
   if(has.SufamiTurboSlotA) sufamiturboA.save();

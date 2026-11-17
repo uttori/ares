@@ -60,6 +60,7 @@ auto CPU::scanline() -> void {
   for(auto coprocessor : coprocessors) Thread::synchronize(*coprocessor);
 
   if(vcounter() == 0) {
+    btGameCartFrame();
     //HDMA setup triggers once every frame
     status.hdmaSetupPosition = (io.version == 1 ? 12 + 8 - dmaCounter() : 12 + dmaCounter());
     status.hdmaSetupTriggered = 0;

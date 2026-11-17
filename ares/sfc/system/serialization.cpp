@@ -9,6 +9,16 @@ auto System::serialize(bool synchronize) -> serializer {
   char description[512] = {};
   memory::copy(&version, (const char*)SerializerVersion, SerializerVersion.size());
 
+  // The same loader can carry different download media. Reject incompatible
+  // states before power() changes the running console or any flash bytes.
+  string media = cartridge.pak ? cartridge.pak->attribute("btDownloadSha256") : string{};
+  if(media) {
+    memory::copy(description, "BTv1:", 5);
+    memory::copy(description + 5, media.data(), 64);
+    // Zero preserves compatibility with ordinary BTv1 download states.
+    description[69] = cartridge.pak->attribute("btScenario").natural();
+  }
+
   s(signature);
   s(synchronize);
   s(version);
@@ -35,6 +45,13 @@ auto System::unserialize(serializer& s) -> bool {
   if(signature != SerializerSignature) return false;
   if(string{version} != SerializerVersion) return false;
   if(ppuAccurate != ppu.accurate) return false;
+  string media = cartridge.pak ? cartridge.pak->attribute("btDownloadSha256") : string{};
+  bool btState = memory::compare(description, "BTv1:", 5) == 0;
+  if(btState != (bool)media) return false;
+  if(btState) {
+    if(memory::compare(description + 5, media.data(), 64) != 0) return false;
+    if((u8)description[69] != cartridge.pak->attribute("btScenario").natural()) return false;
+  }
 
   if(synchronize) power(/* reset = */ false);
   serialize(s, synchronize);

@@ -1,4 +1,5 @@
 #include <sfc/sfc.hpp>
+#include "../cartridge/bt-gamecart.hpp"
 
 namespace ares::SuperFamicom {
 
