@@ -70,6 +70,8 @@ games optionally support 64DD expansion disks, so this option can be used to
 suppress the "64DD Disk" file dialog, and assume any secondary content is 
 disconnected.
 
+Recorder-enabled desktop builds can capture native SNES video and stereo audio from power-on. [FFV1 recording and build instructions](desktop-ui/recording/README.md)
+
 High-level Components
 ---------------------
 

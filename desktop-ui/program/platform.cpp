@@ -219,6 +219,10 @@ auto Program::audio(ares::Node::Audio::Stream node) -> void {
       }
     }
 
+    #if defined(ARES_ENABLE_FFV1)
+    captureMovieAudio(samples);
+    #endif
+
     //apply volume, balance, and clamping to the output frame
     f64 volume = !settings.audio.mute ? settings.audio.volume : 0.0;
     f64 balance = settings.audio.balance;

@@ -36,6 +36,7 @@ auto PPU::DAC::run() -> void {
   auto aboveColor = above();
 
   if(!line) return;
+  if(hires && nativeVideo.receive && self.vcounter() < (self.state.overscan ? 240 : 225)) nativeVideo.hires = true;
   *line++ = self.io.displayBrightness << 15 | (hires ? belowColor : aboveColor);
   *line++ = self.io.displayBrightness << 15 | (aboveColor);
 }

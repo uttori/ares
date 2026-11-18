@@ -71,6 +71,8 @@ auto System::unserialize(serializer& s) -> bool {
 }
 
 auto System::serialize(serializer& s, bool synchronize) -> void {
+  // Restoring a state starts a new emulated timeline, including unsynchronized rewind states.
+  if(s.reading() && nativeVideo.discontinuity) nativeVideo.discontinuity();
   scheduler.setSynchronize(synchronize);
 
   s(random);

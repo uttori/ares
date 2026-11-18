@@ -5,6 +5,8 @@
 #include <span>
 #include <vector>
 
+#include <sfc/ppu/native-video.hpp>
+
 #include <component/processor/arm7tdmi/arm7tdmi.hpp>
 #include <component/processor/gsu/gsu.hpp>
 #include <component/processor/hg51b/hg51b.hpp>

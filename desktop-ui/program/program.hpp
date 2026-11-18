@@ -34,6 +34,14 @@ struct Program : ares::Platform {
   auto showMessage(const string&) -> void;
   auto error(const string&) -> void;
 
+  #if defined(ARES_ENABLE_FFV1)
+  atomic<bool> recordNextGame = false;
+  atomic<bool> movieActive = false;
+  auto startRecording(bool fromBoot) -> void;
+  auto stopRecording() -> void;
+  auto toggleRecording() -> void;
+  #endif
+
   //utility.cpp
   auto pause(bool) -> void;
   auto mute() -> void;

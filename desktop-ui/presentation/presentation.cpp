@@ -372,6 +372,13 @@ Presentation::Presentation() {
     program.undoStateLoad();
     undoLoadStateMenu.setEnabled(false);
   });
+  #if defined(ARES_ENABLE_FFV1)
+  recordNextGame.setText("Record Next Game").onToggle([&] {
+    Program::Guard guard;
+    program.recordNextGame = recordNextGame.checked();
+  });
+  recordVideo.setText("Record Video").onActivate([&] { program.toggleRecording(); });
+  #endif
   captureScreenshot.setText("Capture Screenshot").setIcon(Icon::Emblem::Image).onActivate([&] {
     Program::Guard guard;
     program.requestScreenshot = true;
@@ -704,6 +711,10 @@ auto Presentation::refreshFixedScaleMenu() -> void {
 auto Presentation::loadEmulators() -> void {
   if(program.kiosk) return;
   loadMenu.reset();
+  #if defined(ARES_ENABLE_FFV1)
+  loadMenu.append(recordNextGame.setChecked(program.recordNextGame));
+  loadMenu.append(MenuSeparator());
+  #endif
 
   //clean up the recent games history first
   std::vector<string> recentGames;

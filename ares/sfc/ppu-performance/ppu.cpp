@@ -112,9 +112,16 @@ auto PPU::main() -> void {
       screen->setViewport(x, y, w, h * yScale);
     }
 
+    if(nativeVideo.receive) {
+      nativeVideo.present(screen->pixels().data(), Region::PAL(), state.overscan,
+        state.interlace, field(), system.cpuFrequency());
+    }
     screen->frame();
     scheduler.exit(Event::Frame);
   }
+
+  // Count the actual scanline length after the frame exit so a new recording starts on that boundary.
+  if(nativeVideo.receive) nativeVideo.clocks += hperiod();
 
   step(hperiod() - hcounter());
 }

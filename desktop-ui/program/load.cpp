@@ -175,6 +175,9 @@ auto Program::unload() -> void {
   settings.save();
   clearUndoStates();
   showMessage({"Unloaded ", Location::prefix(emulator->game->location)});
+  #if defined(ARES_ENABLE_FFV1)
+  stopRecording();
+  #endif
   emulator->unload();
   screens.clear();
   streams.clear();
