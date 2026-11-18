@@ -141,6 +141,47 @@ auto SuperFamicom::load(string location) -> LoadResult {
   pak->setAttribute("region", region);
   pak->append("manifest.bml", manifest);
 
+  // A companion opts this launch into the BT board. Keep the two images separate:
+  // only the boot ROM is visible to the CPU until the firmware programs flash.
+  string download = {this->location, ".btgame"};
+  if(!folder && file::exists(download)) {
+    auto size = file::size(download);
+    if(rom.size() != 64_KiB || document["game/board/memory(type=ROM,content=Program)/size"].natural() != 64_KiB
+    || size < 64_KiB || size > 4_MiB) {
+      return {invalidROM, "BT GameCart needs a 64 KiB boot ROM and a 64 KiB to 4 MiB game download."};
+    }
+    auto image = file::read(download);
+    if(image.size() != size) return {invalidROM, "Could not read the BT download."};
+    auto headerMatches = [&](u32 at, u8 mapper) {
+      return (image[at + 0x15] & 0xef) == mapper && (image[at + 0x3d] & 0x80);
+    };
+    bool hiRom = headerMatches(0xffc0, 0x21) && !image[0xffd6] && !image[0xffd8];
+    u8 ramCode = image[0x7fd8];
+    bool ramSupported = image[0x7fd6] == 2 && (ramCode == 1 || ramCode == 3 || ramCode == 5);
+    bool loRom = headerMatches(0x7fc0, 0x20) && ((!image[0x7fd6] && !ramCode) || ramSupported);
+    if(hiRom == loRom) return {invalidROM, "BT download needs one supported headerless LoROM or HiROM header."};
+
+    string scenarioPath = {this->location, ".btmode"};
+    if(file::exists(scenarioPath)) {
+      if(file::size(scenarioPath) > 32) return {invalidROM, "Invalid BT download scenario."};
+      string scenario = string{file::read(scenarioPath)}.strip();
+      if(scenario != "bad-checksum" && scenario != "abort") return {invalidROM, "Unknown BT download scenario."};
+      pak->setAttribute("btScenario", scenario == "abort" ? 2 : 1);
+    }
+    string digest = Hash::SHA256(image).digest();
+    pak->setAttribute("btDownloadSha256", digest);
+    pak->setAttribute("btLoRom", loRom);
+    if(loRom && ramSupported) {
+      // Two payloads can share the same loader. Keep their battery saves separate.
+      pak->append("bt.save.ram", 1024u << ramCode);
+      auto fp = pak->write("bt.save.ram");
+      memory::fill<u8>(fp->data(), fp->size(), 0xff);
+      Medium::load("bt.save.ram", {".bt-", digest, ".ram"});
+      if(fp->size() != (1024u << ramCode)) return {invalidROM, "BT save RAM size does not match the download header."};
+    }
+    pak->append("bt.download.rom", image);
+  }
+
   //find all msu1 files
   auto files = directory::files(directory, "*.msu");
   for(auto _file : directory::files(directory, "*-*.pcm")) {
@@ -197,6 +238,9 @@ auto SuperFamicom::load(string location) -> LoadResult {
 }
 
 auto SuperFamicom::save(string location) -> bool {
+  if(pak && pak->read("bt.save.ram")) {
+    Medium::save("bt.save.ram", {".bt-", pak->attribute("btDownloadSha256"), ".ram"});
+  }
   auto document = BML::unserialize(manifest);
 
   if(auto node = document["game/board/memory(type=RAM,content=Save)"]) {
